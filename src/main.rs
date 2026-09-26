@@ -1,5 +1,9 @@
 #[allow(dead_code)]
 mod audio;
+#[allow(dead_code)]
+mod cycle;
+#[allow(dead_code)]
+mod lenient;
 
 use openaction::{OpenActionResult, run};
 
