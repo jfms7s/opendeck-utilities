@@ -20,6 +20,16 @@
 			"PropertyInspectorPath": "propertyInspector/audio.html",
 			"States": [{ "Image": "icons/actionDefaultImage" }],
 			"Encoder": { "layout": "layouts/level.json" }
+		},
+		{
+			"UUID": "com.jfms7s.utilities.brightness",
+			"Name": "Device Brightness",
+			"Icon": "icons/icon",
+			"Tooltip": "Step or set the Stream Deck's brightness (needs OpenDeck to accept the request - see README)",
+			"Controllers": ["Encoder", "Keypad"],
+			"PropertyInspectorPath": "propertyInspector/brightness.html",
+			"States": [{ "Image": "icons/actionDefaultImage" }],
+			"Encoder": { "layout": "layouts/level.json" }
 		}
 	]
 }

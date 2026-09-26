@@ -1,5 +1,6 @@
 mod actions;
 mod audio;
+mod brightness;
 mod cycle;
 #[allow(dead_code)]
 mod host;
@@ -25,6 +26,13 @@ async fn main() -> OpenActionResult<()> {
     let audio = AudioAction::new(backend);
     tokio::spawn(audio.clone().run_watcher(audio_rx));
     register_action(audio).await;
+
+    let deck_state = opendeck_state::OpenDeckState::discover();
+    let (deck_tx, deck_rx) = watch::channel(0u64);
+    opendeck_state::spawn_watcher(deck_state.clone(), deck_tx);
+    let brightness = actions::brightness::BrightnessAction::new(deck_state.clone());
+    tokio::spawn(brightness.clone().run_watcher(deck_rx.clone()));
+    register_action(brightness).await;
 
     run(std::env::args().collect()).await
 }

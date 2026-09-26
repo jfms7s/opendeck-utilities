@@ -9,7 +9,6 @@ pub const STRIKE_COLOR: &str = "#ef4444";
 pub enum Icon {
     Speaker,
     Mic,
-    #[allow(dead_code)] // used by Task 9/10
     Sun,
     Letter(char),
 }
