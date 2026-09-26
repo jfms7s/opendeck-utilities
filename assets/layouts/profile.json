@@ -1,0 +1,33 @@
+{
+	"$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
+	"id": "com.jfms7s.utilities.profile-layout",
+	"items": [
+		{
+			"key": "active",
+			"type": "text",
+			"rect": [0, 4, 200, 20],
+			"alignment": "center",
+			"color": "#d1d5db",
+			"value": "",
+			"font": { "size": 13, "weight": 500 }
+		},
+		{
+			"key": "candidate",
+			"type": "text",
+			"rect": [0, 28, 200, 40],
+			"alignment": "center",
+			"color": "white",
+			"value": "--",
+			"font": { "size": 24, "weight": 700 }
+		},
+		{
+			"key": "hint",
+			"type": "text",
+			"rect": [0, 72, 200, 22],
+			"alignment": "center",
+			"color": "#9ca3af",
+			"value": "",
+			"font": { "size": 12, "weight": 500 }
+		}
+	]
+}

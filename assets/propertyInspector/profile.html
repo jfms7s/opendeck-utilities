@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<style>
+		body { font: 12px system-ui, sans-serif; margin: 0; padding: 8px 12px; }
+		label { display: block; margin-top: 10px; font-size: 11px; opacity: 0.8; }
+		input, select { width: 100%; box-sizing: border-box; margin-top: 2px; }
+		input[type="checkbox"] { width: auto; }
+		.hidden { display: none; }
+		fieldset { border: 0; margin: 10px 0 0; padding: 0; }
+		legend { padding: 0; font-size: 11px; opacity: 0.8; }
+		.checks label { display: flex; align-items: center; gap: 4px; margin: 2px 0; font-size: 12px; opacity: 1; }
+	</style>
+</head>
+<body>
+	<label for="device">Device (blank = this one)</label>
+	<input id="device" list="devices" />
+	<datalist id="devices"></datalist>
+
+	<div id="key_only">
+		<label for="profile">Profile</label>
+		<select id="profile"></select>
+	</div>
+
+	<fieldset id="dial_only">
+		<legend>Profiles on the dial (none ticked = all)</legend>
+		<div class="checks" id="cycle"></div>
+	</fieldset>
+
+	<script>
+		const byId = (id) => document.getElementById(id);
+		let websocket, uuid, settings = {}, profiles = [];
+
+		window.connectOpenActionSocketData = new Promise((resolve) => {
+			window.connectOpenActionSocket = (...args) => resolve(args);
+			window.connectElgatoStreamDeckSocket = window.connectOpenActionSocket;
+		});
+		window.connectOpenActionSocketData.then(([inPort, inUUID, inRegisterEvent, inInfo, inActionInfo]) => {
+			uuid = inUUID;
+			const actionInfo = JSON.parse(inActionInfo);
+			const isKey = actionInfo.payload.controller === "Keypad";
+			byId("key_only").classList.toggle("hidden", !isKey);
+			byId("dial_only").classList.toggle("hidden", isKey);
+			settings = actionInfo.payload.settings || {};
+			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
+			websocket.onopen = () => {
+				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+				render();
+			};
+			websocket.onmessage = (event) => {
+				const message = JSON.parse(event.data);
+				if (message.event === "didReceiveSettings") {
+					settings = message.payload.settings || {};
+					render();
+				} else if (message.event === "sendToPropertyInspector" && message.payload?.event === "profileChoices") {
+					profiles = message.payload.profiles || [];
+					const list = byId("devices");
+					list.replaceChildren();
+					for (const id of message.payload.devices || []) {
+						const option = document.createElement("option");
+						option.value = id;
+						list.appendChild(option);
+					}
+					render();
+				}
+			};
+		});
+
+		function render() {
+			byId("device").value = settings.device || "";
+			const select = byId("profile");
+			select.replaceChildren();
+			const names = profiles.includes(settings.profile) || !settings.profile ? profiles : [settings.profile, ...profiles];
+			for (const name of names) {
+				const option = document.createElement("option");
+				option.value = name;
+				option.textContent = name;
+				select.appendChild(option);
+			}
+			select.value = settings.profile || "";
+			const root = byId("cycle");
+			root.replaceChildren();
+			const chosen = settings.cycle || [];
+			for (const name of profiles) {
+				const label = document.createElement("label");
+				const box = document.createElement("input");
+				box.type = "checkbox";
+				box.value = name;
+				box.checked = chosen.includes(name);
+				box.addEventListener("change", send);
+				label.append(box, document.createTextNode(name));
+				root.appendChild(label);
+			}
+		}
+
+		function send() {
+			settings = {
+				device: byId("device").value.trim(),
+				profile: byId("profile").value,
+				// Keep the user's dial order: previously chosen first, then newly ticked.
+				cycle: (() => {
+					const ticked = Array.from(document.querySelectorAll("#cycle input:checked")).map((b) => b.value);
+					const kept = (settings.cycle || []).filter((p) => ticked.includes(p));
+					return [...kept, ...ticked.filter((p) => !kept.includes(p))];
+				})(),
+			};
+			websocket.send(JSON.stringify({ event: "setSettings", context: uuid, payload: settings }));
+		}
+		byId("device").addEventListener("change", send);
+		byId("profile").addEventListener("change", send);
+	</script>
+</body>
+</html>

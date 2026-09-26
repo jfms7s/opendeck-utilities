@@ -30,6 +30,16 @@
 			"PropertyInspectorPath": "propertyInspector/brightness.html",
 			"States": [{ "Image": "icons/actionDefaultImage" }],
 			"Encoder": { "layout": "layouts/level.json" }
+		},
+		{
+			"UUID": "com.jfms7s.utilities.profile",
+			"Name": "Switch Profile",
+			"Icon": "icons/icon",
+			"Tooltip": "Switch to a profile, or pick one with the dial and press to switch (needs OpenDeck to accept the request - see README)",
+			"Controllers": ["Encoder", "Keypad"],
+			"PropertyInspectorPath": "propertyInspector/profile.html",
+			"States": [{ "Image": "icons/actionDefaultImage" }],
+			"Encoder": { "layout": "layouts/profile.json" }
 		}
 	]
 }
