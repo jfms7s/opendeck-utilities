@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<style>
+		body { font: 12px system-ui, sans-serif; margin: 0; padding: 8px 12px; }
+		label { display: block; margin-top: 10px; font-size: 11px; opacity: 0.8; }
+		input, select { width: 100%; box-sizing: border-box; margin-top: 2px; }
+		input[type="checkbox"] { width: auto; }
+		.hidden { display: none; }
+		fieldset { border: 0; margin: 10px 0 0; padding: 0; }
+		legend { padding: 0; font-size: 11px; opacity: 0.8; }
+		.checks label, label.inline { display: flex; align-items: center; gap: 4px; margin: 4px 0 0; font-size: 12px; opacity: 1; }
+	</style>
+</head>
+<body>
+	<label for="target">Control</label>
+	<select id="target">
+		<option value="default_output">Default output (follows system)</option>
+		<option value="default_input">Default input / mic (follows system)</option>
+		<option value="output">Specific output device</option>
+		<option value="input">Specific input device</option>
+		<option value="app">Application</option>
+	</select>
+
+	<div id="target_name_row" class="hidden">
+		<label for="target_name" id="target_name_label">Device</label>
+		<input id="target_name" list="target_names" />
+		<datalist id="target_names"></datalist>
+	</div>
+
+	<label for="step">Volume step (%)</label>
+	<input id="step" type="number" min="1" max="20" />
+
+	<label for="max_volume">Maximum volume</label>
+	<select id="max_volume">
+		<option value="100">100%</option>
+		<option value="125">125%</option>
+		<option value="150">150%</option>
+	</select>
+
+	<div class="encoder-only">
+		<label for="rotate">Rotate</label>
+		<select id="rotate">
+			<option value="volume">Change volume</option>
+			<option value="cycle_device">Switch device</option>
+			<option value="none">Nothing</option>
+		</select>
+	</div>
+
+	<div id="gestures"></div>
+
+	<fieldset>
+		<legend>Devices to switch between (none ticked = all)</legend>
+		<div class="checks" id="cycle_devices"></div>
+	</fieldset>
+
+	<label for="label">Label (blank = device or app name)</label>
+	<input id="label" />
+
+	<label for="accent">Accent colour</label>
+	<input id="accent" type="color" />
+
+	<label class="inline"><input id="show_percent" type="checkbox" /> Show percent</label>
+
+	<datalist id="device_names"></datalist>
+
+	<script>
+		const OPS = [
+			["none", "Nothing"], ["toggle_mute", "Toggle mute"], ["volume_up", "Volume up"],
+			["volume_down", "Volume down"], ["set_volume", "Set volume to…"], ["cycle_device", "Switch to next device"],
+			["set_default_device", "Switch to device…"], ["push_to_talk", "Push to talk (hold)"],
+		];
+		const SLOTS = [["press", "Press"], ["long_press", "Long press (hold ½ s)"], ["touch_tap", "Touch-strip tap"]];
+		const byId = (id) => document.getElementById(id);
+
+		let websocket, uuid, controller = "Keypad", settings = {}, choices = null;
+
+		window.connectOpenActionSocketData = new Promise((resolve) => {
+			window.connectOpenActionSocket = (...args) => resolve(args);
+			window.connectElgatoStreamDeckSocket = window.connectOpenActionSocket;
+		});
+
+		window.connectOpenActionSocketData.then(([inPort, inUUID, inRegisterEvent, inInfo, inActionInfo]) => {
+			uuid = inUUID;
+			const actionInfo = JSON.parse(inActionInfo);
+			controller = actionInfo.payload.controller || "Keypad";
+			settings = actionInfo.payload.settings || {};
+			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
+			websocket.onopen = () => {
+				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+				render();
+			};
+			websocket.onmessage = (event) => {
+				const message = JSON.parse(event.data);
+				if (message.event === "didReceiveSettings") {
+					settings = message.payload.settings || {};
+					render();
+				} else if (message.event === "sendToPropertyInspector" && message.payload?.event === "audioChoices") {
+					choices = message.payload;
+					controller = choices.controller || controller;
+					render();
+				}
+			};
+		});
+
+		function gestureValue(slot) {
+			return settings[slot] ?? choices?.effective?.[slot] ?? { op: "none", volume: 50, device: "" };
+		}
+
+		function field(slot, name) {
+			return document.querySelector(`[data-slot="${slot}"][data-field="${name}"]`);
+		}
+
+		function buildGestures() {
+			const root = byId("gestures");
+			root.replaceChildren();
+			for (const [slot, title] of SLOTS) {
+				if (slot === "touch_tap" && controller !== "Encoder") continue;
+				const label = document.createElement("label");
+				label.textContent = title;
+				const select = document.createElement("select");
+				select.dataset.slot = slot;
+				select.dataset.field = "op";
+				for (const [value, text] of OPS) {
+					if (value === "push_to_talk" && slot !== "press") continue;
+					const option = document.createElement("option");
+					option.value = value;
+					option.textContent = text;
+					select.appendChild(option);
+				}
+				const volume = document.createElement("input");
+				Object.assign(volume, { type: "number", min: 0, max: 150, placeholder: "Volume %" });
+				volume.dataset.slot = slot;
+				volume.dataset.field = "volume";
+				const device = document.createElement("input");
+				device.setAttribute("list", "device_names");
+				device.placeholder = "Device";
+				device.dataset.slot = slot;
+				device.dataset.field = "device";
+				for (const el of [select, volume, device]) el.addEventListener("change", onChange);
+				root.append(label, select, volume, device);
+			}
+		}
+
+		function toggleGestureFields(slot) {
+			const select = field(slot, "op");
+			if (!select) return;
+			field(slot, "volume").classList.toggle("hidden", select.value !== "set_volume");
+			field(slot, "device").classList.toggle("hidden", select.value !== "set_default_device");
+		}
+
+		function isInputTarget() {
+			return ["default_input", "input"].includes(byId("target").value);
+		}
+
+		function fillOptions(list, items) {
+			list.replaceChildren();
+			for (const [value, text] of items) {
+				const option = document.createElement("option");
+				option.value = value;
+				option.label = text;
+				list.appendChild(option);
+			}
+		}
+
+		function updateTargetName() {
+			const target = byId("target").value;
+			byId("target_name_row").classList.toggle("hidden", !["output", "input", "app"].includes(target));
+			byId("target_name_label").textContent = target === "app" ? "Application (process or app name)" : "Device";
+			if (!choices) return;
+			const devices = isInputTarget() ? choices.inputs : choices.outputs;
+			const items = target === "app"
+				? choices.apps.map((a) => [a.match, a.app_name])
+				: ["output", "input"].includes(target) ? devices.map((d) => [d.name, d.description]) : [];
+			fillOptions(byId("target_names"), items);
+			// Apps can only be moved to outputs.
+			const switchable = target === "app" ? choices.outputs : devices;
+			fillOptions(byId("device_names"), switchable.map((d) => [d.name, d.description]));
+		}
+
+		function fillCycle() {
+			const root = byId("cycle_devices");
+			root.replaceChildren();
+			if (!choices) return;
+			const list = isInputTarget() ? choices.inputs : choices.outputs;
+			const chosen = settings.cycle_devices || [];
+			for (const d of list) {
+				const label = document.createElement("label");
+				const box = document.createElement("input");
+				box.type = "checkbox";
+				box.value = d.name;
+				box.checked = chosen.includes(d.name);
+				box.addEventListener("change", onChange);
+				label.append(box, document.createTextNode(d.description));
+				root.appendChild(label);
+			}
+		}
+
+		function render() {
+			byId("target").value = settings.target || "default_output";
+			byId("target_name").value = settings.target_name || "";
+			byId("step").value = settings.step ?? 5;
+			byId("max_volume").value = String(settings.max_volume ?? 100);
+			byId("rotate").value = settings.rotate || "volume";
+			byId("label").value = settings.label || "";
+			byId("accent").value = /^#[0-9a-fA-F]{6}$/.test(settings.accent || "") ? settings.accent : "#4fc3f7";
+			byId("show_percent").checked = settings.show_percent ?? true;
+			document.querySelectorAll(".encoder-only").forEach((el) => el.classList.toggle("hidden", controller !== "Encoder"));
+			buildGestures();
+			for (const [slot] of SLOTS) {
+				const select = field(slot, "op");
+				if (!select) continue;
+				const g = gestureValue(slot);
+				select.value = g.op;
+				field(slot, "volume").value = g.volume ?? 50;
+				field(slot, "device").value = g.device || "";
+				toggleGestureFields(slot);
+			}
+			updateTargetName();
+			fillCycle();
+		}
+
+		function collect() {
+			const next = {
+				target: byId("target").value,
+				target_name: byId("target_name").value.trim(),
+				step: parseInt(byId("step").value, 10) || 5,
+				max_volume: parseInt(byId("max_volume").value, 10) || 100,
+				rotate: byId("rotate").value,
+				label: byId("label").value,
+				accent: byId("accent").value,
+				show_percent: byId("show_percent").checked,
+				cycle_devices: Array.from(document.querySelectorAll("#cycle_devices input:checked")).map((b) => b.value),
+			};
+			for (const [slot] of SLOTS) {
+				const select = field(slot, "op");
+				if (!select) {
+					// Not shown for this controller - keep whatever was stored.
+					if (settings[slot]) next[slot] = settings[slot];
+					continue;
+				}
+				next[slot] = {
+					op: select.value,
+					volume: parseInt(field(slot, "volume").value, 10) || 0,
+					device: field(slot, "device").value.trim(),
+				};
+			}
+			return next;
+		}
+
+		function onChange() {
+			settings = collect();
+			for (const [slot] of SLOTS) toggleGestureFields(slot);
+			updateTargetName();
+			fillCycle();
+			websocket.send(JSON.stringify({ event: "setSettings", context: uuid, payload: settings }));
+		}
+
+		for (const id of ["target", "target_name", "step", "max_volume", "rotate", "label", "accent", "show_percent"]) {
+			byId(id).addEventListener("change", onChange);
+		}
+	</script>
+</body>
+</html>

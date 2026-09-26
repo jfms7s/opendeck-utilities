@@ -1,18 +1,27 @@
-#[allow(dead_code)]
+mod actions;
 mod audio;
-#[allow(dead_code)]
 mod cycle;
-#[allow(dead_code)]
 mod lenient;
-#[allow(dead_code)]
 mod render;
 
-use openaction::{OpenActionResult, run};
+use actions::audio::AudioAction;
+use audio::backend::{AudioBackend, PactlBackend, spawn_subscriber};
+use openaction::{OpenActionResult, register_action, run};
+use std::sync::Arc;
+use tokio::sync::watch;
 
 #[tokio::main]
 async fn main() -> OpenActionResult<()> {
     simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())
         .expect("logger init");
+
+    let (audio_tx, audio_rx) = watch::channel(0u64);
+    spawn_subscriber(audio_tx);
+    let backend: Arc<dyn AudioBackend> = Arc::new(PactlBackend);
+    let audio = AudioAction::new(backend);
+    tokio::spawn(audio.clone().run_watcher(audio_rx));
+    register_action(audio).await;
+
     run(std::env::args().collect()).await
 }
 

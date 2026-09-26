@@ -10,5 +10,16 @@
 		"aarch64-unknown-linux-gnu": "opendeck-utilities-aarch64-unknown-linux-gnu"
 	},
 	"CodePathLin": "opendeck-utilities-x86_64-unknown-linux-gnu",
-	"Actions": []
+	"Actions": [
+		{
+			"UUID": "com.jfms7s.utilities.audio",
+			"Name": "Audio",
+			"Icon": "icons/icon",
+			"Tooltip": "Volume, mute and device switching for an output, input or app, with a live level on the key or touch strip",
+			"Controllers": ["Encoder", "Keypad"],
+			"PropertyInspectorPath": "propertyInspector/audio.html",
+			"States": [{ "Image": "icons/actionDefaultImage" }],
+			"Encoder": { "layout": "layouts/level.json" }
+		}
+	]
 }
