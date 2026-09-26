@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+mod audio;
+
 use openaction::{OpenActionResult, run};
 
 #[tokio::main]

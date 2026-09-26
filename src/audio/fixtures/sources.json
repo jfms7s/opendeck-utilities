@@ -1,0 +1,4 @@
+[
+ {"index":70,"name":"alsa_input.usb-webcam-02.mono-fallback","description":"Full HD webcam Mono","mute":true,"volume":{"mono":{"value":52429,"value_percent":"80%","db":"-5.81 dB"}},"properties":{}},
+ {"index":71,"name":"alsa_output.usb-Razer_Razer_Leviathan_V2-00.analog-stereo.monitor","description":"Monitor of Razer Leviathan V2 Analog Stereo","mute":false,"volume":{"front-left":{"value":65536,"value_percent":"100%","db":"0.00 dB"}},"properties":{}}
+]
