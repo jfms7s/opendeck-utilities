@@ -1,10 +1,14 @@
-//! Events sent to the OpenDeck host itself. Stock OpenDeck only honours
-//! `switchProfile`/`deviceBrightness` from the Starter Pack plugin
-//! (src-tauri/src/events/inbound/mod.rs), so callers confirm the effect by
+//! Events sent to the OpenDeck host itself. Stock OpenDeck drops
+//! `switchProfile`/`deviceBrightness` sent over a plugin's websocket unless
+//! the plugin is the Starter Pack (src-tauri/src/events/inbound/mod.rs), but
+//! `opendeck --process-message <json>` hands the event to the running
+//! instance without that check. Callers still confirm the effect by
 //! re-reading OpenDeck's state and warn when it never arrives.
 
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -30,8 +34,44 @@ pub fn switch_profile_event(device: &str, profile: &str) -> Value {
     json!({ "event": "switchProfile", "device": device, "profile": profile })
 }
 
+/// Delivers `event` through OpenDeck's command line; if that can't run,
+/// falls back to the plugin websocket (honoured only by patched hosts).
 pub async fn send(event: Value) -> openaction::OpenActionResult<()> {
-    openaction::send_arbitrary_json(event).await
+    let parent =
+        std::fs::read_link(format!("/proc/{}/exe", std::os::unix::process::parent_id())).ok();
+    let program = opendeck_program(parent);
+    let status = tokio::process::Command::new(&program)
+        .args(process_message_args(&event))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        other => {
+            log::warn!(
+                "{} --process-message failed ({other:?}); sending over the websocket instead",
+                program.display()
+            );
+            openaction::send_arbitrary_json(event).await
+        }
+    }
+}
+
+/// OpenDeck starts the plugin, so its parent is normally the OpenDeck binary.
+fn opendeck_program(parent_exe: Option<PathBuf>) -> PathBuf {
+    parent_exe
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("opendeck"))
+        })
+        .unwrap_or_else(|| PathBuf::from("opendeck"))
+}
+
+fn process_message_args(event: &Value) -> [String; 2] {
+    ["--process-message".to_string(), event.to_string()]
 }
 
 /// Polls `read` until it returns `expected` or `timeout` passes.
@@ -60,8 +100,8 @@ pub async fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bo
 pub fn warn_ignored_once() {
     if !WARNED.swap(true, Ordering::SeqCst) {
         log::warn!(
-            "OpenDeck ignored a brightness/profile request: stock OpenDeck only accepts these \
-             from com.amansprojects.starterpack.sdPlugin (see README)"
+            "OpenDeck ignored a brightness/profile request: check that `opendeck --process-message` \
+             works on this install (see README)"
         );
     }
 }
@@ -82,6 +122,32 @@ mod tests {
             switch_profile_event("sd-1", "gaming"),
             json!({"event": "switchProfile", "device": "sd-1", "profile": "gaming"})
         );
+    }
+
+    #[test]
+    fn program_is_the_parent_when_it_is_opendeck() {
+        assert_eq!(
+            opendeck_program(Some(PathBuf::from("/usr/bin/opendeck"))),
+            PathBuf::from("/usr/bin/opendeck")
+        );
+    }
+
+    #[test]
+    fn program_falls_back_to_path_lookup() {
+        assert_eq!(opendeck_program(None), PathBuf::from("opendeck"));
+        assert_eq!(
+            opendeck_program(Some(PathBuf::from("/usr/bin/bash"))),
+            PathBuf::from("opendeck")
+        );
+    }
+
+    #[test]
+    fn message_is_one_argument() {
+        let e = switch_profile_event("sd-1", "my profile");
+        let args = process_message_args(&e);
+        assert_eq!(args[0], "--process-message");
+        assert_eq!(args.len(), 2);
+        assert_eq!(serde_json::from_str::<Value>(&args[1]).ok(), Some(e));
     }
 
     #[tokio::test(start_paused = true)]

@@ -21,15 +21,19 @@ customizable actions for keys and dials:
 - OpenDeck installed natively (config in `~/.config/opendeck`) or as the
   Flatpak (config in `~/.var/app/me.amankhanna.opendeck/config/opendeck`).
 
-## Known limitation: brightness and profiles
+## How brightness and profile switching work
 
-Stock OpenDeck only accepts brightness and profile-switch requests from its
-own Starter Pack plugin (`src-tauri/src/events/inbound/mod.rs`), and silently
-drops them from any other plugin. These two actions are included anyway:
-they show the current brightness / active profile (read from OpenDeck's
-config files, never written), and if OpenDeck ignores a request the control
-flashes an alert and the plugin log says why. They start working as soon as
-OpenDeck accepts the events from other plugins.
+Stock OpenDeck drops brightness and profile-switch requests sent over a
+plugin's websocket unless they come from its own Starter Pack plugin
+(`src-tauri/src/events/inbound/mod.rs`). This plugin sends them through
+OpenDeck's command line instead, `opendeck --process-message <json>`, which
+hands the request to the running OpenDeck without that check (OpenDeck
+2.14.0 and later). It runs the OpenDeck binary that started the plugin, or
+`opendeck` on `PATH`.
+
+Each action re-reads OpenDeck's config files (never written) to confirm the
+change. If it doesn't land within 1.5 s, the control flashes an alert and
+the plugin log says why.
 
 ## Build and install
 

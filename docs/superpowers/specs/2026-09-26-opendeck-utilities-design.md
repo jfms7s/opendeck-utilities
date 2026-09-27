@@ -33,7 +33,14 @@ events when the sender's plugin UUID is `com.amansprojects.starterpack.sdPlugin`
 InboundEventType::SwitchProfile(_) | InboundEventType::DeviceBrightness(_))`
 guard). Events from any other plugin are silently dropped.
 
-Decision (user): build Brightness and Switch Profile anyway. On stock
+Update (2026-09-27, after on-device testing): the websocket route was
+confirmed dropped, but `opendeck --process-message <json>` (OpenDeck ≥ 2.14.0,
+`src-tauri/src/main.rs` single-instance callback) processes the same event
+with `skip_auth`, bypassing the guard. `host::send` now uses it — the parent
+process's binary when it is OpenDeck, else `opendeck` on `PATH` — and falls
+back to the websocket only if the command can't run. §6.5 detection stays.
+
+Original decision (user): build Brightness and Switch Profile anyway. On stock
 OpenDeck they will not take effect; the plugin detects this (§6.3) and says
 so visibly, and the README documents the limitation. No OpenDeck fork or
 upstream PR is part of this project.
