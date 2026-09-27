@@ -97,12 +97,17 @@ pub fn down_operation(e: &Effective) -> Operation {
     }
 }
 
-/// On key/dial up. A hold counts as a long-press only when a long-press
+/// On key/dial up. `held` is `None` when a turn consumed the press
+/// (hold + turn), which fires nothing — except push-to-talk, which must
+/// always mute again. A hold counts as a long-press only when a long-press
 /// operation is configured; otherwise any hold is a plain press.
-pub fn release_operation(e: &Effective, held: Duration, step: u16) -> Operation {
+pub fn release_operation(e: &Effective, held: Option<Duration>, step: u16) -> Operation {
     if e.press.op == OpKind::PushToTalk {
         return Operation::SetMute(true);
     }
+    let Some(held) = held else {
+        return Operation::None;
+    };
     if e.long_press.op != OpKind::None && held >= LONG_PRESS {
         gesture_operation(&e.long_press, step)
     } else {
@@ -148,7 +153,7 @@ mod tests {
     fn short_press_runs_press_op() {
         let e = eff(Controller::Encoder);
         assert_eq!(
-            release_operation(&e, Duration::from_millis(200), 5),
+            release_operation(&e, Some(Duration::from_millis(200)), 5),
             Operation::ToggleMute
         );
     }
@@ -157,7 +162,7 @@ mod tests {
     fn hold_at_threshold_runs_long_press_op() {
         let e = eff(Controller::Encoder);
         assert_eq!(
-            release_operation(&e, LONG_PRESS, 5),
+            release_operation(&e, Some(LONG_PRESS), 5),
             Operation::CycleDevice(1)
         );
     }
@@ -166,7 +171,7 @@ mod tests {
     fn hold_without_long_press_op_is_a_press() {
         let e = eff(Controller::Keypad);
         assert_eq!(
-            release_operation(&e, Duration::from_secs(3), 5),
+            release_operation(&e, Some(Duration::from_secs(3)), 5),
             Operation::ToggleMute
         );
     }
@@ -181,8 +186,26 @@ mod tests {
         let e = effective(&s, Controller::Keypad);
         assert_eq!(down_operation(&e), Operation::SetMute(false));
         assert_eq!(
-            release_operation(&e, Duration::from_secs(2), 5),
+            release_operation(&e, Some(Duration::from_secs(2)), 5),
             Operation::SetMute(true)
+        );
+    }
+
+    #[test]
+    fn push_to_talk_mutes_on_up_even_after_hold_and_turn() {
+        let s = AudioSettings {
+            press: Some(op(OpKind::PushToTalk)),
+            ..AudioSettings::default()
+        };
+        let e = effective(&s, Controller::Encoder);
+        assert_eq!(release_operation(&e, None, 5), Operation::SetMute(true));
+    }
+
+    #[test]
+    fn hold_and_turn_release_does_nothing() {
+        assert_eq!(
+            release_operation(&eff(Controller::Encoder), None, 5),
+            Operation::None
         );
     }
 

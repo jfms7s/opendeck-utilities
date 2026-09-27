@@ -204,9 +204,7 @@ impl AudioAction {
         instance: &Instance,
         settings: &AudioSettings,
     ) -> OpenActionResult<()> {
-        let Some(held) = self.press_released(&instance.instance_id) else {
-            return Ok(());
-        };
+        let held = self.press_released(&instance.instance_id);
         let e = gesture::effective(settings, controller(instance));
         self.perform(
             instance,
