@@ -217,6 +217,11 @@ pub fn is_relevant_event(line: &str) -> bool {
     matches!(facility, "sink" | "source" | "sink-input" | "server")
 }
 
+/// A missing `pactl` will not appear by retrying (spec §7).
+pub fn should_retry(e: &BackendError) -> bool {
+    !matches!(e, BackendError::NotInstalled)
+}
+
 pub fn next_backoff(current: Duration) -> Duration {
     (current * 2).min(MAX_BACKOFF)
 }
@@ -248,8 +253,9 @@ async fn run_subscribe(tx: &watch::Sender<u64>) -> Result<bool, BackendError> {
     Ok(saw_output)
 }
 
-/// Keeps one `pactl subscribe` alive forever, bumping `tx` on every
-/// relevant change and once after each (re)start so listeners resync.
+/// Keeps one `pactl subscribe` alive, bumping `tx` on every relevant
+/// change and once after each (re)start so listeners resync. Gives up
+/// (after one bump, so the error is shown) when `pactl` is not installed.
 pub fn spawn_subscriber(tx: watch::Sender<u64>) {
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(1);
@@ -257,6 +263,11 @@ pub fn spawn_subscriber(tx: watch::Sender<u64>) {
             match run_subscribe(&tx).await {
                 Ok(true) => backoff = Duration::from_secs(1),
                 Ok(false) => log::warn!("pactl subscribe exited without output"),
+                Err(e) if !should_retry(&e) => {
+                    log::warn!("pactl subscribe failed, not retrying: {e}");
+                    bump(&tx);
+                    return;
+                }
                 Err(e) => log::warn!("pactl subscribe failed: {e}"),
             }
             bump(&tx);
@@ -366,6 +377,13 @@ mod tests {
         assert!(!is_relevant_event("Event 'new' on source-output #5"));
         assert!(!is_relevant_event("Event 'change' on client #90"));
         assert!(!is_relevant_event("garbage"));
+    }
+
+    #[test]
+    fn missing_pactl_is_not_retried() {
+        assert!(!should_retry(&BackendError::NotInstalled));
+        assert!(should_retry(&BackendError::Timeout));
+        assert!(should_retry(&BackendError::Io(std::io::Error::other("x"))));
     }
 
     #[test]
