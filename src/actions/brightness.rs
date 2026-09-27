@@ -15,6 +15,12 @@ struct Shared {
     instances: DashSet<String>,
 }
 
+/// Whether to watch for OpenDeck's stored brightness to change (spec §6.5).
+/// Only a request that cannot change a known value needs no check.
+fn needs_confirmation(before: Option<u8>, expected: Option<u8>) -> bool {
+    before.is_none() || expected != before
+}
+
 #[derive(Clone)]
 pub struct BrightnessAction {
     shared: Arc<Shared>,
@@ -58,20 +64,21 @@ impl BrightnessAction {
     }
 
     /// Sends the request, then checks in the background that OpenDeck's
-    /// stored brightness actually moved; alerts once if it didn't.
+    /// stored brightness actually changed; alerts if it didn't. Any change
+    /// counts: a fast dial spin may overtake the predicted value.
     async fn send(&self, instance: &Instance, request: Request) -> OpenActionResult<()> {
         let before = self.shared.state.brightness();
         if let Err(e) = host::send(host::brightness_event(request.change, request.value)).await {
             log::warn!("deviceBrightness send failed: {e}");
             return instance.show_alert().await;
         }
-        let Some(expected) = request.expected.filter(|e| Some(*e) != before) else {
+        if !needs_confirmation(before, request.expected) {
             return Ok(());
-        };
+        }
         let state = self.shared.state.clone();
         let id = instance.instance_id.clone();
         tokio::spawn(async move {
-            if !host::wait_for(&expected, || state.brightness(), host::CONFIRM_TIMEOUT).await {
+            if !host::wait_until(|| state.brightness() != before, host::CONFIRM_TIMEOUT).await {
                 host::warn_ignored_once();
                 if let Some(instance) = openaction::get_instance(id).await {
                     let _ = instance.show_alert().await;
@@ -160,6 +167,14 @@ impl Action for BrightnessAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirms_unless_the_request_cannot_change_a_known_value() {
+        assert!(needs_confirmation(Some(50), Some(55)));
+        assert!(!needs_confirmation(Some(100), Some(100)));
+        assert!(needs_confirmation(None, None));
+        assert!(needs_confirmation(Some(50), None));
+    }
 
     #[test]
     fn uuid_is_in_the_manifest() {

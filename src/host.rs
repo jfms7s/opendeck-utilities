@@ -40,9 +40,14 @@ pub async fn wait_for<T: PartialEq>(
     mut read: impl FnMut() -> Option<T>,
     timeout: Duration,
 ) -> bool {
+    wait_until(|| read().as_ref() == Some(expected), timeout).await
+}
+
+/// Polls `done` until it returns true or `timeout` passes.
+pub async fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if read().as_ref() == Some(expected) {
+        if done() {
             return true;
         }
         if Instant::now() >= deadline {
@@ -92,6 +97,28 @@ mod tests {
         )
         .await;
         assert!(ok);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_until_sees_a_change_before_the_timeout() {
+        let calls = Cell::new(0);
+        let ok = wait_until(
+            || {
+                calls.set(calls.get() + 1);
+                calls.get() >= 3
+            },
+            CONFIRM_TIMEOUT,
+        )
+        .await;
+        assert!(ok);
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wait_until_gives_up_after_the_timeout() {
+        let start = Instant::now();
+        assert!(!wait_until(|| false, CONFIRM_TIMEOUT).await);
+        assert!(start.elapsed() >= CONFIRM_TIMEOUT);
     }
 
     #[tokio::test(start_paused = true)]
