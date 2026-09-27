@@ -33,7 +33,14 @@ events when the sender's plugin UUID is `com.amansprojects.starterpack.sdPlugin`
 InboundEventType::SwitchProfile(_) | InboundEventType::DeviceBrightness(_))`
 guard). Events from any other plugin are silently dropped.
 
-Decision (user): build Brightness and Switch Profile anyway. On stock
+Update (2026-09-27, after on-device testing): the websocket route was
+confirmed dropped, but `opendeck --process-message <json>` (OpenDeck ≥ 2.14.0,
+`src-tauri/src/main.rs` single-instance callback) processes the same event
+with `skip_auth`, bypassing the guard. `host::send` now uses it — the parent
+process's binary when it is OpenDeck, else `opendeck` on `PATH` — and falls
+back to the websocket only if the command can't run. §6.5 detection stays.
+
+Original decision (user): build Brightness and Switch Profile anyway. On stock
 OpenDeck they will not take effect; the plugin detects this (§6.3) and says
 so visibly, and the README documents the limitation. No OpenDeck fork or
 upstream PR is part of this project.
@@ -113,8 +120,8 @@ Config dir: first existing of `~/.config/opendeck`,
 - Profiles for device `D`: file stems of `profiles/D/*.json`, sorted.
 - Active profile for `D`: `profiles/D.json` → `selected_profile`.
 
-A shared task polls these files' mtimes every 1 s and publishes a `watch`
-tick on change. Missing/unparseable files yield `None` ("unknown"), never an
+A shared task polls these files' mtimes every 250 ms (was 1 s; tightened
+after on-device testing) and publishes a `watch` tick on change. Missing/unparseable files yield `None` ("unknown"), never an
 error that reaches the user.
 
 ### 6.2 Audio action
@@ -192,6 +199,13 @@ free text for apps not running.
   active profile and highlighted candidate.
 
 ### 6.5 Host-event failure detection (Brightness, Switch Profile)
+
+Responsiveness (added after on-device testing): a request whose outcome is
+known is shown on every control at once and held for up to 2 s until
+OpenDeck's saved state matches (`pending.rs`). Brightness gestures become
+an absolute "set" target sent by one background task that skips targets
+overtaken while a send was in flight; profile switches are sent in the
+background. The event loop never waits on the `opendeck` command.
 
 After sending a host event, if the corresponding §6.1 value has not changed
 within 1.5 s, the instance shows the alert icon once and logs a warning

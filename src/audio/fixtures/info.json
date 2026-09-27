@@ -1,0 +1,1 @@
+{"server_name":"PulseAudio (on PipeWire 1.6.9)","default_sample_specification":"float32le 2ch 48000Hz","default_sink_name":"alsa_output.usb-Razer_Razer_Leviathan_V2-00.analog-stereo","default_source_name":"alsa_input.usb-webcam-02.mono-fallback"}

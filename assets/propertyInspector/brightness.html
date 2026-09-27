@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<style>
+		body { font: 12px system-ui, sans-serif; margin: 0; padding: 8px 12px; }
+		label { display: block; margin-top: 10px; font-size: 11px; opacity: 0.8; }
+		input, select { width: 100%; box-sizing: border-box; margin-top: 2px; }
+		.hidden { display: none; }
+		p.note { font-size: 11px; opacity: 0.7; }
+	</style>
+</head>
+<body>
+	<div id="key_only">
+		<label for="key_op">Key press</label>
+		<select id="key_op">
+			<option value="increase">Increase by step</option>
+			<option value="decrease">Decrease by step</option>
+			<option value="set">Set to value</option>
+			<option value="toggle_presets">Toggle between presets</option>
+		</select>
+		<label for="value">Value (%)</label>
+		<input id="value" type="number" min="0" max="100" />
+	</div>
+	<label for="step">Step (%)</label>
+	<input id="step" type="number" min="1" max="50" />
+	<label for="preset_a">Preset A (%)</label>
+	<input id="preset_a" type="number" min="0" max="100" />
+	<label for="preset_b">Preset B (%)</label>
+	<input id="preset_b" type="number" min="0" max="100" />
+	<p class="note">Dial: rotate steps, press toggles presets. Stock OpenDeck only accepts brightness changes from its Starter Pack; if nothing happens the control flashes an alert.</p>
+	<script>
+		const FIELDS = { key_op: "increase", value: 50, step: 5, preset_a: 0, preset_b: 50 };
+		const byId = (id) => document.getElementById(id);
+		let websocket, uuid;
+
+		window.connectOpenActionSocketData = new Promise((resolve) => {
+			window.connectOpenActionSocket = (...args) => resolve(args);
+			window.connectElgatoStreamDeckSocket = window.connectOpenActionSocket;
+		});
+		window.connectOpenActionSocketData.then(([inPort, inUUID, inRegisterEvent, inInfo, inActionInfo]) => {
+			uuid = inUUID;
+			const actionInfo = JSON.parse(inActionInfo);
+			byId("key_only").classList.toggle("hidden", actionInfo.payload.controller !== "Keypad");
+			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
+			websocket.onopen = () => {
+				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+				apply(actionInfo.payload.settings || {});
+			};
+			websocket.onmessage = (event) => {
+				const message = JSON.parse(event.data);
+				if (message.event === "didReceiveSettings") apply(message.payload.settings || {});
+			};
+		});
+
+		function apply(settings) {
+			for (const [id, fallback] of Object.entries(FIELDS)) byId(id).value = settings[id] ?? fallback;
+		}
+
+		function send() {
+			const payload = { key_op: byId("key_op").value };
+			for (const id of ["value", "step", "preset_a", "preset_b"]) payload[id] = parseInt(byId(id).value, 10) || 0;
+			websocket.send(JSON.stringify({ event: "setSettings", context: uuid, payload }));
+		}
+		for (const id of Object.keys(FIELDS)) byId(id).addEventListener("change", send);
+	</script>
+</body>
+</html>

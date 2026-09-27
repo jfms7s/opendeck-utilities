@@ -1,0 +1,46 @@
+{
+	"Name": "Utilities",
+	"Author": "jfms7s",
+	"Version": "0.1.0",
+	"Category": "Utilities",
+	"Icon": "icons/icon",
+	"CategoryIcon": "icons/category",
+	"OS": [{ "Platform": "linux" }],
+	"CodePaths": {
+		"x86_64-unknown-linux-gnu": "opendeck-utilities-x86_64-unknown-linux-gnu",
+		"aarch64-unknown-linux-gnu": "opendeck-utilities-aarch64-unknown-linux-gnu"
+	},
+	"CodePathLin": "opendeck-utilities-x86_64-unknown-linux-gnu",
+	"Actions": [
+		{
+			"UUID": "com.jfms7s.utilities.audio",
+			"Name": "Audio",
+			"Icon": "icons/audio",
+			"Tooltip": "Volume, mute and device switching for an output, input or app, with a live level on the key or touch strip",
+			"Controllers": ["Encoder", "Keypad"],
+			"PropertyInspectorPath": "propertyInspector/audio.html",
+			"States": [{ "Image": "icons/audioKey" }],
+			"Encoder": { "layout": "layouts/level.json" }
+		},
+		{
+			"UUID": "com.jfms7s.utilities.brightness",
+			"Name": "Device Brightness",
+			"Icon": "icons/brightness",
+			"Tooltip": "Step or set the Stream Deck's brightness",
+			"Controllers": ["Encoder", "Keypad"],
+			"PropertyInspectorPath": "propertyInspector/brightness.html",
+			"States": [{ "Image": "icons/brightnessKey" }],
+			"Encoder": { "layout": "layouts/level.json" }
+		},
+		{
+			"UUID": "com.jfms7s.utilities.profile",
+			"Name": "Switch Profile",
+			"Icon": "icons/profile",
+			"Tooltip": "Switch to a profile, or pick one with the dial and press to switch",
+			"Controllers": ["Encoder", "Keypad"],
+			"PropertyInspectorPath": "propertyInspector/profile.html",
+			"States": [{ "Image": "icons/profileKey" }],
+			"Encoder": { "layout": "layouts/profile.json" }
+		}
+	]
+}

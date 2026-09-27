@@ -1,0 +1,6 @@
+[
+ {"index":100,"driver":"PipeWire","client":90,"sink":61,"mute":false,"volume":{"front-left":{"value":65536,"value_percent":"100%","db":"0.00 dB"},"front-right":{"value":65536,"value_percent":"100%","db":"0.00 dB"}},"properties":{"application.name":"Google Chrome","application.process.binary":"chrome","media.name":"Playback"}},
+ {"index":101,"driver":"PipeWire","client":90,"sink":61,"mute":false,"volume":{"front-left":{"value":58982,"value_percent":"90%","db":"-2.75 dB"}},"properties":{"application.name":"Google Chrome","application.process.binary":"chrome"}},
+ {"index":102,"driver":"PipeWire","client":91,"sink":60,"mute":true,"volume":{"front-left":{"value":19661,"value_percent":"30%","db":"-31.4 dB"}},"properties":{"application.name":"Spotify","application.process.binary":"spotify"}},
+ {"index":103,"driver":"PipeWire","client":92,"sink":61,"mute":false,"volume":{"front-left":{"value":65536,"value_percent":"100%","db":"0.00 dB"}}}
+]
