@@ -16,7 +16,10 @@ customizable actions for keys and dials:
 
 ## Requirements
 
-- Linux with PipeWire (or PulseAudio) and `pactl` on `PATH`.
+- Linux with PipeWire (or PulseAudio) and `pactl` 16 or newer on `PATH`
+  (the plugin reads `pactl -f json` output, added in version 16).
+- OpenDeck installed natively (config in `~/.config/opendeck`) or as the
+  Flatpak (config in `~/.var/app/me.amankhanna.opendeck/config/opendeck`).
 
 ## Known limitation: brightness and profiles
 
@@ -35,5 +38,8 @@ cargo build --release --target x86_64-unknown-linux-gnu
 node build.mjs x86_64-unknown-linux-gnu
 cp -r dist/com.jfms7s.utilities.sdPlugin ~/.config/opendeck/plugins/
 ```
+
+For the Flatpak, copy it to
+`~/.var/app/me.amankhanna.opendeck/config/opendeck/plugins/` instead.
 
 Then restart OpenDeck.
