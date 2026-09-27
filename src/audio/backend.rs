@@ -137,13 +137,22 @@ fn spawn_error(e: std::io::Error) -> BackendError {
     }
 }
 
+/// Every `pactl` invocation starts here. Its messages (notably the
+/// `pactl subscribe` event lines) are gettext-translated, so force the C
+/// locale to keep them parseable.
+fn pactl_command() -> Command {
+    let mut cmd = Command::new(PACTL);
+    cmd.env("LC_ALL", "C").env("LANGUAGE", "C");
+    cmd
+}
+
 pub struct PactlBackend;
 
 impl PactlBackend {
     async fn run(args: &[String]) -> Result<String, BackendError> {
         let output = tokio::time::timeout(
             COMMAND_TIMEOUT,
-            Command::new(PACTL).args(args).kill_on_drop(true).output(),
+            pactl_command().args(args).kill_on_drop(true).output(),
         )
         .await
         .map_err(|_| BackendError::Timeout)?
@@ -219,7 +228,7 @@ fn bump(tx: &watch::Sender<u64>) {
 /// Runs one `pactl subscribe` until it exits. Returns whether it printed
 /// anything (a healthy run resets the restart backoff).
 async fn run_subscribe(tx: &watch::Sender<u64>) -> Result<bool, BackendError> {
-    let mut child = Command::new(PACTL)
+    let mut child = pactl_command()
         .arg("subscribe")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -333,6 +342,19 @@ mod tests {
         assert!(matches!(err, BackendError::UnsafeName(_)), "{err:?}");
         let err = PactlBackend.move_stream(1, "-s").await.unwrap_err();
         assert!(matches!(err, BackendError::UnsafeName(_)), "{err:?}");
+    }
+
+    #[test]
+    fn pactl_runs_in_the_c_locale() {
+        let cmd = pactl_command();
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        assert_eq!(cmd.as_std().get_program(), PACTL);
+        for key in ["LC_ALL", "LANGUAGE"] {
+            assert!(
+                envs.contains(&(std::ffi::OsStr::new(key), Some(std::ffi::OsStr::new("C")))),
+                "{key} not set to C: {envs:?}"
+            );
+        }
     }
 
     #[test]
