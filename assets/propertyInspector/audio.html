@@ -74,6 +74,12 @@
 		];
 		const SLOTS = [["press", "Press"], ["long_press", "Long press (hold ½ s)"], ["touch_tap", "Touch-strip tap"]];
 		const byId = (id) => document.getElementById(id);
+		// Mirrors gesture::effective in src/audio/gesture.rs, used until the plugin's choices arrive.
+		const gesture = (op) => ({ op, volume: 50, device: "" });
+		const DEFAULT_GESTURES = {
+			Keypad: { press: gesture("toggle_mute"), long_press: gesture("none"), touch_tap: gesture("none") },
+			Encoder: { press: gesture("toggle_mute"), long_press: gesture("cycle_device"), touch_tap: gesture("toggle_mute") },
+		};
 
 		let websocket, uuid, controller = "Keypad", settings = {}, choices = null;
 
@@ -90,6 +96,8 @@
 			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
 			websocket.onopen = () => {
 				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+				// Ask again once registered: the plugin's first push can arrive too early.
+				websocket.send(JSON.stringify({ event: "sendToPlugin", action: actionInfo.action, context: inUUID, payload: { event: "requestChoices" } }));
 				render();
 			};
 			websocket.onmessage = (event) => {
@@ -106,7 +114,7 @@
 		});
 
 		function gestureValue(slot) {
-			return settings[slot] ?? choices?.effective?.[slot] ?? { op: "none", volume: 50, device: "" };
+			return settings[slot] ?? choices?.effective?.[slot] ?? DEFAULT_GESTURES[controller === "Keypad" ? "Keypad" : "Encoder"][slot];
 		}
 
 		function field(slot, name) {

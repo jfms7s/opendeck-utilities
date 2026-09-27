@@ -1,3 +1,4 @@
+use super::is_choices_request;
 use crate::audio::backend::{AudioBackend, BackendError};
 use crate::audio::exec::execute;
 use crate::audio::gesture::{self, Controller, Operation};
@@ -142,6 +143,17 @@ impl AudioAction {
         self.refresh().await;
         self.render_all().await;
         Ok(())
+    }
+
+    async fn send_choices(
+        &self,
+        instance: &Instance,
+        settings: &AudioSettings,
+    ) -> OpenActionResult<()> {
+        let snap = self.shared.backend.snapshot().await.unwrap_or_default();
+        instance
+            .send_to_property_inspector(choices(&snap, settings, controller(instance)))
+            .await
     }
 
     fn press_started(&self, id: &str) {
@@ -298,10 +310,19 @@ impl Action for AudioAction {
         instance: &Instance,
         settings: &AudioSettings,
     ) -> OpenActionResult<()> {
-        let snap = self.shared.backend.snapshot().await.unwrap_or_default();
-        instance
-            .send_to_property_inspector(choices(&snap, settings, controller(instance)))
-            .await
+        self.send_choices(instance, settings).await
+    }
+
+    async fn send_to_plugin(
+        &self,
+        instance: &Instance,
+        settings: &AudioSettings,
+        payload: &serde_json::Value,
+    ) -> OpenActionResult<()> {
+        if is_choices_request(payload) {
+            self.send_choices(instance, settings).await?;
+        }
+        Ok(())
     }
 }
 

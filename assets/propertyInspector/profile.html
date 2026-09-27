@@ -46,6 +46,8 @@
 			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
 			websocket.onopen = () => {
 				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+				// Ask again once registered: the plugin's first push can arrive too early.
+				websocket.send(JSON.stringify({ event: "sendToPlugin", action: actionInfo.action, context: inUUID, payload: { event: "requestChoices" } }));
 				render();
 			};
 			websocket.onmessage = (event) => {

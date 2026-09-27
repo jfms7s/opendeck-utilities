@@ -1,3 +1,4 @@
+use super::is_choices_request;
 use crate::cycle::step_in;
 use crate::host;
 use crate::opendeck_state::OpenDeckState;
@@ -244,6 +245,18 @@ impl Action for ProfileAction {
         settings: &ProfileSettings,
     ) -> OpenActionResult<()> {
         self.send_choices(instance, settings).await
+    }
+
+    async fn send_to_plugin(
+        &self,
+        instance: &Instance,
+        settings: &ProfileSettings,
+        payload: &serde_json::Value,
+    ) -> OpenActionResult<()> {
+        if is_choices_request(payload) {
+            self.send_choices(instance, settings).await?;
+        }
+        Ok(())
     }
 }
 
