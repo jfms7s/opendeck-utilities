@@ -40,8 +40,14 @@ pub fn strip_feedback(view: &LevelView) -> Value {
 pub fn tile_image(view: &LevelView) -> String {
     let color = view.safe_color();
     let bar_width = (view.bar.clamp(0.0, 100.0) * 0.8).round();
+    // resvg rejects width="0", so an empty bar draws no fill at all.
+    let fill = if bar_width > 0.0 {
+        format!(r#"<rect x="10" y="90" width="{bar_width}" height="5" rx="2.5" fill="{color}"/>"#)
+    } else {
+        String::new()
+    };
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{card}<g transform="translate(32 4) scale(0.36)">{icon}</g>{value}{title}<rect x="10" y="90" width="80" height="5" rx="2.5" fill="{TRACK_COLOR}"/><rect x="10" y="90" width="{bar_width}" height="5" rx="2.5" fill="{color}"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{card}<g transform="translate(32 4) scale(0.36)">{icon}</g>{value}{title}<rect x="10" y="90" width="80" height="5" rx="2.5" fill="{TRACK_COLOR}"/>{fill}</svg>"#,
         card = tile::card(),
         icon = icon_svg(&view.icon, &color, view.struck),
         value = tile::text_line(64.0, 24.0, true, TEXT_COLOR, &view.value_text),
@@ -97,6 +103,13 @@ mod tests {
         };
         assert!(!strip_feedback(&v).to_string().contains("evil"));
         assert!(!tile::decode(&tile_image(&v)).contains("evil"));
+    }
+
+    #[test]
+    fn empty_bar_draws_no_zero_width_rect() {
+        let mut v = view();
+        v.bar = 0.0;
+        assert!(!tile::decode(&tile_image(&v)).contains(r#"width="0""#));
     }
 
     #[test]
