@@ -8,7 +8,7 @@ use crate::audio::target::resolve;
 use crate::audio::view::{audio_view, error_view};
 use crate::render::show_level;
 use async_trait::async_trait;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use openaction::{Action, Instance, OpenActionResult};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +26,9 @@ struct Shared {
     instances: DashMap<String, AudioSettings>,
     /// When each currently-held key/dial went down.
     pressed: DashMap<String, Instant>,
+    /// Dials turned while held: their release performs nothing, so a
+    /// long "hold + turn" never fires the long-press operation.
+    consumed: DashSet<String>,
 }
 
 #[derive(Clone)]
@@ -52,6 +55,7 @@ impl AudioAction {
                 snapshot: RwLock::new(Err("loading".to_string())),
                 instances: DashMap::new(),
                 pressed: DashMap::new(),
+                consumed: DashSet::new(),
             }),
         }
     }
@@ -141,15 +145,35 @@ impl AudioAction {
     }
 
     fn press_started(&self, id: &str) {
+        self.shared.consumed.remove(id);
         self.shared.pressed.insert(id.to_string(), Instant::now());
     }
 
-    fn press_released(&self, id: &str) -> Duration {
-        self.shared
-            .pressed
-            .remove(id)
-            .map(|(_, t)| t.elapsed())
-            .unwrap_or_default()
+    /// A turn while the dial is held turns the press into a "hold + turn".
+    fn press_rotated(&self, id: &str, pressed: bool) {
+        if pressed && self.shared.pressed.remove(id).is_some() {
+            self.shared.consumed.insert(id.to_string());
+        }
+    }
+
+    /// How long the press was held, or `None` when a turn consumed it.
+    fn press_released(&self, id: &str) -> Option<Duration> {
+        if self.shared.consumed.remove(id).is_some() {
+            return None;
+        }
+        Some(
+            self.shared
+                .pressed
+                .remove(id)
+                .map(|(_, t)| t.elapsed())
+                .unwrap_or_default(),
+        )
+    }
+
+    fn forget(&self, id: &str) {
+        self.shared.instances.remove(id);
+        self.shared.pressed.remove(id);
+        self.shared.consumed.remove(id);
     }
 
     async fn press_down(
@@ -168,7 +192,9 @@ impl AudioAction {
         instance: &Instance,
         settings: &AudioSettings,
     ) -> OpenActionResult<()> {
-        let held = self.press_released(&instance.instance_id);
+        let Some(held) = self.press_released(&instance.instance_id) else {
+            return Ok(());
+        };
         let e = gesture::effective(settings, controller(instance));
         self.perform(
             instance,
@@ -200,8 +226,7 @@ impl Action for AudioAction {
         instance: &Instance,
         _settings: &AudioSettings,
     ) -> OpenActionResult<()> {
-        self.shared.instances.remove(&instance.instance_id);
-        self.shared.pressed.remove(&instance.instance_id);
+        self.forget(&instance.instance_id);
         Ok(())
     }
 
@@ -245,8 +270,9 @@ impl Action for AudioAction {
         instance: &Instance,
         settings: &AudioSettings,
         ticks: i16,
-        _pressed: bool,
+        pressed: bool,
     ) -> OpenActionResult<()> {
+        self.press_rotated(&instance.instance_id, pressed);
         let op = gesture::rotate_operation(settings.rotate, ticks, settings.step());
         self.perform(instance, settings, op).await
     }
@@ -303,15 +329,57 @@ mod tests {
 
     #[test]
     fn release_without_press_counts_as_a_tap() {
-        assert_eq!(action().press_released("never-pressed"), Duration::ZERO);
+        assert_eq!(
+            action().press_released("never-pressed"),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
     fn press_is_forgotten_after_release() {
         let a = action();
         a.press_started("k");
-        a.press_released("k");
+        assert!(a.press_released("k").is_some());
         assert!(a.shared.pressed.is_empty());
+    }
+
+    #[test]
+    fn rotating_while_held_consumes_the_press() {
+        let a = action();
+        a.press_started("d");
+        a.press_rotated("d", true);
+        assert_eq!(a.press_released("d"), None);
+    }
+
+    #[test]
+    fn rotating_without_holding_keeps_the_press() {
+        let a = action();
+        a.press_started("d");
+        a.press_rotated("d", false);
+        assert!(a.press_released("d").is_some());
+    }
+
+    #[test]
+    fn consumed_mark_is_cleared_after_release() {
+        let a = action();
+        a.press_started("d");
+        a.press_rotated("d", true);
+        a.press_released("d");
+        assert!(a.shared.consumed.is_empty());
+        a.press_started("d");
+        assert!(a.press_released("d").is_some());
+    }
+
+    #[test]
+    fn forgetting_an_instance_clears_its_press_state() {
+        let a = action();
+        a.press_started("d");
+        a.press_rotated("d", true);
+        a.press_started("k");
+        a.forget("d");
+        a.forget("k");
+        assert!(a.shared.pressed.is_empty());
+        assert!(a.shared.consumed.is_empty());
     }
 
     #[tokio::test]
