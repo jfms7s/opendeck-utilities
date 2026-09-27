@@ -14,12 +14,16 @@ pub fn adjust_volume(current: u16, delta: i32, max: u16) -> u16 {
 }
 
 /// Device names to cycle through, ordered by description (case-insensitive,
-/// then by name). A non-empty `subset` limits it to those names that exist.
+/// then by name). A non-empty `subset` limits it to those names that exist;
+/// if none of them exist any more, all devices are used.
 pub fn cycle_candidates(devices: &[Device], subset: &[String]) -> Vec<String> {
     let mut chosen: Vec<&Device> = devices
         .iter()
-        .filter(|d| subset.is_empty() || subset.contains(&d.name))
+        .filter(|d| subset.contains(&d.name))
         .collect();
+    if chosen.is_empty() {
+        chosen = devices.iter().collect();
+    }
     chosen.sort_by(|a, b| {
         a.description
             .to_lowercase()
@@ -68,5 +72,15 @@ mod tests {
             "alsa_output.pci-0000_2f_00.4.iec958-stereo".to_string(),
         ];
         assert_eq!(cycle_candidates(&s.sinks, &subset), vec![subset[1].clone()]);
+    }
+
+    #[test]
+    fn stale_subset_falls_back_to_all_devices() {
+        let s = fixture_snapshot();
+        let subset = vec!["gone".to_string()];
+        assert_eq!(
+            cycle_candidates(&s.sinks, &subset),
+            cycle_candidates(&s.sinks, &[])
+        );
     }
 }
