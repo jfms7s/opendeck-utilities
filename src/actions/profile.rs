@@ -2,6 +2,7 @@ use super::is_choices_request;
 use crate::cycle::step_in;
 use crate::host;
 use crate::opendeck_state::OpenDeckState;
+use crate::pending::Pending;
 use crate::profile::{ProfileSettings, cycle_list, dial_view, key_view, target_device};
 use crate::render::{KEYPAD, show_profile};
 use async_trait::async_trait;
@@ -16,6 +17,8 @@ struct Shared {
     instances: DashMap<String, ProfileSettings>,
     /// Dial instances: the profile currently highlighted but not yet chosen.
     highlighted: DashMap<String, String>,
+    /// Per device: the profile just switched to, shown until OpenDeck saves it.
+    pending: DashMap<String, Pending<String>>,
 }
 
 #[derive(Clone)]
@@ -30,7 +33,18 @@ impl ProfileAction {
                 state,
                 instances: DashMap::new(),
                 highlighted: DashMap::new(),
+                pending: DashMap::new(),
             }),
+        }
+    }
+
+    /// The device's active profile, or the one just switched to if OpenDeck
+    /// hasn't saved it yet.
+    fn active_profile(&self, device: &str) -> Option<String> {
+        let saved = self.shared.state.active_profile(device);
+        match self.shared.pending.get(device) {
+            Some(p) => p.resolve(saved),
+            None => saved,
         }
     }
 
@@ -40,7 +54,7 @@ impl ProfileAction {
         settings: &ProfileSettings,
     ) -> OpenActionResult<()> {
         let device = target_device(settings, &instance.device_id);
-        let active = self.shared.state.active_profile(&device);
+        let active = self.active_profile(&device);
         let view = if instance.controller == KEYPAD {
             key_view(active.as_deref(), &settings.profile)
         } else {
@@ -87,29 +101,43 @@ impl ProfileAction {
         if profile.trim().is_empty() {
             return instance.show_alert().await;
         }
-        let already = self.shared.state.active_profile(&device).as_deref() == Some(profile);
-        if let Err(e) = host::send(host::switch_profile_event(&device, profile)).await {
-            log::warn!("switchProfile send failed: {e}");
-            return instance.show_alert().await;
+        let already = self.active_profile(&device).as_deref() == Some(profile);
+        if !already {
+            self.shared
+                .pending
+                .entry(device.clone())
+                .or_insert_with(Pending::new)
+                .set(profile.to_string());
+            self.render_all().await;
         }
-        if already {
-            return Ok(());
-        }
+        // Send and confirm off the event loop so the next gesture isn't held
+        // up by the `opendeck` call.
         let state = self.shared.state.clone();
+        let event = host::switch_profile_event(&device, profile);
         let expected = profile.to_string();
         let id = instance.instance_id.clone();
         tokio::spawn(async move {
-            if !host::wait_for(
-                &expected,
-                || state.active_profile(&device),
-                host::CONFIRM_TIMEOUT,
-            )
-            .await
-            {
-                host::warn_ignored_once();
-                if let Some(instance) = openaction::get_instance(id).await {
-                    let _ = instance.show_alert().await;
+            let confirmed = match host::send(event).await {
+                Err(e) => {
+                    log::warn!("switchProfile send failed: {e}");
+                    false
                 }
+                Ok(()) if already => true,
+                Ok(()) => {
+                    let ok = host::wait_for(
+                        &expected,
+                        || state.active_profile(&device),
+                        host::CONFIRM_TIMEOUT,
+                    )
+                    .await;
+                    if !ok {
+                        host::warn_ignored_once();
+                    }
+                    ok
+                }
+            };
+            if !confirmed && let Some(instance) = openaction::get_instance(id).await {
+                let _ = instance.show_alert().await;
             }
         });
         Ok(())
@@ -211,7 +239,7 @@ impl Action for ProfileAction {
             .highlighted
             .get(&instance.instance_id)
             .map(|h| h.clone())
-            .or_else(|| self.shared.state.active_profile(&device))
+            .or_else(|| self.active_profile(&device))
             .unwrap_or_default();
         if let Some(next) = step_in(&list, &current, i64::from(ticks)) {
             self.shared

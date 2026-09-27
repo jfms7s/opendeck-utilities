@@ -11,7 +11,7 @@ const CANDIDATES: [&str; 2] = [
     ".config/opendeck",
     ".var/app/me.amankhanna.opendeck/config/opendeck",
 ];
-const POLL: Duration = Duration::from_secs(1);
+const POLL: Duration = Duration::from_millis(250);
 
 pub fn find_config_dir(home: &Path) -> Option<PathBuf> {
     CANDIDATES.iter().map(|p| home.join(p)).find(|p| p.is_dir())

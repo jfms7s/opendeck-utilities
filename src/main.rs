@@ -5,6 +5,7 @@ mod cycle;
 mod host;
 mod lenient;
 mod opendeck_state;
+mod pending;
 mod profile;
 mod render;
 
@@ -35,6 +36,7 @@ async fn main() -> OpenActionResult<()> {
 
     let brightness = BrightnessAction::new(deck_state.clone());
     tokio::spawn(brightness.clone().run_watcher(deck_rx.clone()));
+    tokio::spawn(brightness.clone().run_sender());
     register_action(brightness).await;
 
     let profile = ProfileAction::new(deck_state);

@@ -120,8 +120,8 @@ Config dir: first existing of `~/.config/opendeck`,
 - Profiles for device `D`: file stems of `profiles/D/*.json`, sorted.
 - Active profile for `D`: `profiles/D.json` → `selected_profile`.
 
-A shared task polls these files' mtimes every 1 s and publishes a `watch`
-tick on change. Missing/unparseable files yield `None` ("unknown"), never an
+A shared task polls these files' mtimes every 250 ms (was 1 s; tightened
+after on-device testing) and publishes a `watch` tick on change. Missing/unparseable files yield `None` ("unknown"), never an
 error that reaches the user.
 
 ### 6.2 Audio action
@@ -199,6 +199,13 @@ free text for apps not running.
   active profile and highlighted candidate.
 
 ### 6.5 Host-event failure detection (Brightness, Switch Profile)
+
+Responsiveness (added after on-device testing): a request whose outcome is
+known is shown on every control at once and held for up to 2 s until
+OpenDeck's saved state matches (`pending.rs`). Brightness gestures become
+an absolute "set" target sent by one background task that skips targets
+overtaken while a send was in flight; profile switches are sent in the
+background. The event loop never waits on the `opendeck` command.
 
 After sending a host event, if the corresponding §6.1 value has not changed
 within 1.5 s, the instance shows the alert icon once and logs a warning
