@@ -2,31 +2,38 @@
 <html lang="en">
 <head>
 	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<link rel="stylesheet" href="pi.css" />
 	<style>
-		body { font: 12px system-ui, sans-serif; margin: 0; padding: 8px 12px; }
-		label { display: block; margin-top: 10px; font-size: 11px; opacity: 0.8; }
-		input, select { width: 100%; box-sizing: border-box; margin-top: 2px; }
-		input[type="checkbox"] { width: auto; }
-		.hidden { display: none; }
-		fieldset { border: 0; margin: 10px 0 0; padding: 0; }
-		legend { padding: 0; font-size: 11px; opacity: 0.8; }
-		.checks label { display: flex; align-items: center; gap: 4px; margin: 2px 0; font-size: 12px; opacity: 1; }
+		.checks { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
 	</style>
 </head>
 <body>
-	<label for="device">Device (blank = this one)</label>
-	<input id="device" list="devices" />
-	<datalist id="devices"></datalist>
+	<main class="pi">
+		<section class="card" id="key_only">
+			<h2>Switch to</h2>
+			<div class="field">
+				<label for="profile">Profile</label>
+				<select id="profile"></select>
+			</div>
+		</section>
 
-	<div id="key_only">
-		<label for="profile">Profile</label>
-		<select id="profile"></select>
-	</div>
+		<section class="card">
+			<h2>Device</h2>
+			<div class="field">
+				<label for="device">Device</label>
+				<input id="device" list="devices" />
+				<datalist id="devices"></datalist>
+				<p class="hint">Blank = this one.</p>
+			</div>
+		</section>
 
-	<fieldset id="dial_only">
-		<legend>Profiles on the dial (none ticked = all)</legend>
-		<div class="checks" id="cycle"></div>
-	</fieldset>
+		<section class="card" id="dial_only" role="group" aria-label="Profiles on the dial">
+			<h2>Profiles on the dial</h2>
+			<p class="hint">None ticked = all, in the order they were ticked.</p>
+			<div class="checks" id="cycle"></div>
+		</section>
+	</main>
 
 	<script>
 		const byId = (id) => document.getElementById(id);
@@ -86,6 +93,7 @@
 			const chosen = settings.cycle || [];
 			for (const name of profiles) {
 				const label = document.createElement("label");
+				label.className = "check";
 				const box = document.createElement("input");
 				box.type = "checkbox";
 				box.value = name;
