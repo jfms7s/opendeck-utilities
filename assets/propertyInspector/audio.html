@@ -3,66 +3,80 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<link rel="stylesheet" href="pi.css" />
 	<style>
-		body { font: 12px system-ui, sans-serif; margin: 0; padding: 8px 12px; }
-		label { display: block; margin-top: 10px; font-size: 11px; opacity: 0.8; }
-		input, select { width: 100%; box-sizing: border-box; margin-top: 2px; }
-		input[type="checkbox"] { width: auto; }
-		.hidden { display: none; }
-		fieldset { border: 0; margin: 10px 0 0; padding: 0; }
-		legend { padding: 0; font-size: 11px; opacity: 0.8; }
-		.checks label, label.inline { display: flex; align-items: center; gap: 4px; margin: 4px 0 0; font-size: 12px; opacity: 1; }
+		#gestures { display: flex; flex-direction: column; gap: 10px; }
+		.checks { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
 	</style>
 </head>
 <body>
-	<label for="target">Control</label>
-	<select id="target">
-		<option value="default_output">Default output (follows system)</option>
-		<option value="default_input">Default input / mic (follows system)</option>
-		<option value="output">Specific output device</option>
-		<option value="input">Specific input device</option>
-		<option value="app">Application</option>
-	</select>
+	<main class="pi">
+		<section class="card">
+			<h2>Target</h2>
+			<div class="field">
+				<label for="target">Control</label>
+				<select id="target">
+					<option value="default_output">Default output (follows system)</option>
+					<option value="default_input">Default input / mic (follows system)</option>
+					<option value="output">Specific output device</option>
+					<option value="input">Specific input device</option>
+					<option value="app">Application</option>
+				</select>
+			</div>
+			<div id="target_name_row" class="field hidden">
+				<label for="target_name" id="target_name_label">Device</label>
+				<input id="target_name" list="target_names" />
+				<datalist id="target_names"></datalist>
+			</div>
+			<div class="row">
+				<div class="field">
+					<label for="step">Volume step (%)</label>
+					<input id="step" type="number" min="1" max="20" />
+				</div>
+				<div class="field">
+					<label for="max_volume">Maximum volume</label>
+					<select id="max_volume">
+						<option value="100">100%</option>
+						<option value="125">125%</option>
+						<option value="150">150%</option>
+					</select>
+				</div>
+			</div>
+		</section>
 
-	<div id="target_name_row" class="hidden">
-		<label for="target_name" id="target_name_label">Device</label>
-		<input id="target_name" list="target_names" />
-		<datalist id="target_names"></datalist>
-	</div>
+		<section class="card">
+			<h2>Gestures</h2>
+			<div class="field encoder-only">
+				<label for="rotate">Rotate</label>
+				<select id="rotate">
+					<option value="volume">Change volume</option>
+					<option value="cycle_device">Switch device</option>
+					<option value="none">Nothing</option>
+				</select>
+			</div>
+			<div id="gestures"></div>
+		</section>
 
-	<label for="step">Volume step (%)</label>
-	<input id="step" type="number" min="1" max="20" />
+		<section class="card" role="group" aria-label="Devices to switch between">
+			<h2>Devices to switch between</h2>
+			<p class="hint">None ticked = all.</p>
+			<div class="checks" id="cycle_devices"></div>
+		</section>
 
-	<label for="max_volume">Maximum volume</label>
-	<select id="max_volume">
-		<option value="100">100%</option>
-		<option value="125">125%</option>
-		<option value="150">150%</option>
-	</select>
-
-	<div class="encoder-only">
-		<label for="rotate">Rotate</label>
-		<select id="rotate">
-			<option value="volume">Change volume</option>
-			<option value="cycle_device">Switch device</option>
-			<option value="none">Nothing</option>
-		</select>
-	</div>
-
-	<div id="gestures"></div>
-
-	<fieldset>
-		<legend>Devices to switch between (none ticked = all)</legend>
-		<div class="checks" id="cycle_devices"></div>
-	</fieldset>
-
-	<label for="label">Label (blank = device or app name)</label>
-	<input id="label" />
-
-	<label for="accent">Accent colour</label>
-	<input id="accent" type="color" />
-
-	<label class="inline"><input id="show_percent" type="checkbox" /> Show percent</label>
+		<section class="card">
+			<h2>Display</h2>
+			<div class="field">
+				<label for="label">Label</label>
+				<input id="label" />
+				<p class="hint">Blank = device or app name.</p>
+			</div>
+			<div class="field">
+				<label for="accent">Accent colour</label>
+				<input id="accent" type="color" />
+			</div>
+			<label class="check"><input id="show_percent" type="checkbox" /> Show percent</label>
+		</section>
+	</main>
 
 	<datalist id="device_names"></datalist>
 
@@ -140,6 +154,7 @@
 				}
 				const volume = document.createElement("input");
 				Object.assign(volume, { type: "number", min: 0, max: 150, placeholder: "Volume %" });
+				volume.className = "narrow";
 				volume.dataset.slot = slot;
 				volume.dataset.field = "volume";
 				const device = document.createElement("input");
@@ -148,7 +163,13 @@
 				device.dataset.slot = slot;
 				device.dataset.field = "device";
 				for (const el of [select, volume, device]) el.addEventListener("change", onChange);
-				root.append(label, select, volume, device);
+				const row = document.createElement("div");
+				row.className = "row";
+				row.append(select, volume, device);
+				const wrapper = document.createElement("div");
+				wrapper.className = "field";
+				wrapper.append(label, row);
+				root.appendChild(wrapper);
 			}
 		}
 
@@ -196,6 +217,7 @@
 			const chosen = settings.cycle_devices || [];
 			for (const d of list) {
 				const label = document.createElement("label");
+				label.className = "check";
 				const box = document.createElement("input");
 				box.type = "checkbox";
 				box.value = d.name;
