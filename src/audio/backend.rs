@@ -47,6 +47,8 @@ pub enum BackendError {
     Io(std::io::Error),
 }
 
+/// The audio system: read it, change it, and hear about changes made
+/// anywhere (so a second backend or a test fake comes as one object).
 #[async_trait]
 pub trait AudioBackend: Send + Sync {
     async fn snapshot(&self) -> Result<Snapshot, BackendError>;
@@ -54,6 +56,8 @@ pub trait AudioBackend: Send + Sync {
     async fn set_mute(&self, node: &Node, mute: Mute) -> Result<(), BackendError>;
     async fn set_default(&self, kind: DeviceKind, name: &str) -> Result<(), BackendError>;
     async fn move_stream(&self, stream: u32, sink: &str) -> Result<(), BackendError>;
+    /// Starts reporting changes: bumps `tx` on every relevant change.
+    fn subscribe(&self, tx: watch::Sender<u64>);
 }
 
 pub fn is_safe_name(name: &str) -> bool {
@@ -146,6 +150,38 @@ fn pactl_command() -> Command {
     cmd
 }
 
+/// Makes the child die with the plugin. `kill_on_drop` only fires on an
+/// orderly shutdown; OpenDeck stops plugins with a signal, which used to
+/// leave `pactl subscribe` running for days (performance review). The
+/// kernel sends the child SIGTERM when the thread that spawned it exits -
+/// here a long-lived runtime worker, so in practice when the plugin does.
+fn die_with_parent(cmd: &mut Command) {
+    // SAFETY: the hook runs in the forked child before exec and only makes
+    // async-signal-safe calls.
+    unsafe {
+        cmd.pre_exec(parent_death_hook());
+    }
+}
+
+/// The `pre_exec` hook behind `die_with_parent`: prctl, getppid and _exit
+/// only, all async-signal-safe.
+fn parent_death_hook() -> impl FnMut() -> std::io::Result<()> + Send + Sync + 'static {
+    let parent = std::process::id();
+    move || {
+        // SAFETY: plain syscalls with no pointers.
+        unsafe {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // The plugin may have died between fork and prctl.
+            if libc::getppid() as u32 != parent {
+                libc::_exit(0);
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct PactlBackend;
 
 impl PactlBackend {
@@ -176,13 +212,19 @@ impl PactlBackend {
 #[async_trait]
 impl AudioBackend for PactlBackend {
     async fn snapshot(&self) -> Result<Snapshot, BackendError> {
-        let (info, sinks, sources, inputs) = tokio::try_join!(
+        let (info, sinks, sources, inputs) = tokio::join!(
             Self::json(&["info"]),
             Self::json(&["list", "sinks"]),
             Self::json(&["list", "sources"]),
             Self::json(&["list", "sink-inputs"]),
-        )?;
-        Ok(model::build_snapshot(&info, &sinks, &sources, &inputs)?)
+        );
+        // Streams only matter to App controls; failing to list them must
+        // not blank every device control too.
+        let inputs = inputs.unwrap_or_else(|e| {
+            log::warn!("listing app streams failed: {e}");
+            "[]".to_string()
+        });
+        Ok(model::build_snapshot(&info?, &sinks?, &sources?, &inputs)?)
     }
 
     async fn set_volume(&self, node: &Node, percent: u16) -> Result<(), BackendError> {
@@ -203,6 +245,10 @@ impl AudioBackend for PactlBackend {
     async fn move_stream(&self, stream: u32, sink: &str) -> Result<(), BackendError> {
         check(sink)?;
         Self::run(&move_args(stream, sink)).await.map(|_| ())
+    }
+
+    fn subscribe(&self, tx: watch::Sender<u64>) {
+        spawn_subscriber(tx);
     }
 }
 
@@ -233,14 +279,12 @@ fn bump(tx: &watch::Sender<u64>) {
 /// Runs one `pactl subscribe` until it exits. Returns whether it printed
 /// anything (a healthy run resets the restart backoff).
 async fn run_subscribe(tx: &watch::Sender<u64>) -> Result<bool, BackendError> {
-    let mut child = pactl_command()
-        .arg("subscribe")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(spawn_error)?;
-    let stdout = child.stdout.take().ok_or(BackendError::NoTarget)?;
+    let mut cmd = subscribe_command();
+    let mut child = cmd.spawn().map_err(spawn_error)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| BackendError::Io(std::io::Error::other("pactl subscribe: no stdout")))?;
     let mut lines = BufReader::new(stdout).lines();
     let mut saw_output = false;
     while let Some(line) = lines.next_line().await.map_err(BackendError::Io)? {
@@ -253,10 +297,20 @@ async fn run_subscribe(tx: &watch::Sender<u64>) -> Result<bool, BackendError> {
     Ok(saw_output)
 }
 
+fn subscribe_command() -> Command {
+    let mut cmd = pactl_command();
+    cmd.arg("subscribe")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    die_with_parent(&mut cmd);
+    cmd
+}
+
 /// Keeps one `pactl subscribe` alive, bumping `tx` on every relevant
 /// change and once after each (re)start so listeners resync. Gives up
 /// (after one bump, so the error is shown) when `pactl` is not installed.
-pub fn spawn_subscriber(tx: watch::Sender<u64>) {
+fn spawn_subscriber(tx: watch::Sender<u64>) {
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(1);
         loop {
@@ -366,6 +420,33 @@ mod tests {
                 "{key} not set to C: {envs:?}"
             );
         }
+    }
+
+    /// The child must not outlive whoever spawned it: once the spawning
+    /// thread exits, the kernel sends it SIGTERM.
+    #[test]
+    fn a_child_dies_with_the_thread_that_spawned_it() {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        let mut child = std::thread::spawn(|| {
+            let mut cmd = std::process::Command::new("sleep");
+            cmd.arg("30");
+            // SAFETY: see `die_with_parent`.
+            unsafe {
+                cmd.pre_exec(parent_death_hook());
+            }
+            cmd.spawn().unwrap()
+        })
+        .join()
+        .unwrap();
+        let status = child.wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGTERM), "{status:?}");
+    }
+
+    #[test]
+    fn the_subscriber_is_tied_to_the_plugin() {
+        let cmd = subscribe_command();
+        let args: Vec<_> = cmd.as_std().get_args().collect();
+        assert_eq!(args, vec!["subscribe"]);
     }
 
     #[test]

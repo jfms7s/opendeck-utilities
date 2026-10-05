@@ -2,6 +2,7 @@
 name = "opendeck-utilities"
 version = "0.1.2"
 edition = "2024"
+rust-version = "1.88"
 license = "MIT"
 description = "OpenDeck plugin: customizable audio, device brightness and profile switching controls"
 repository = "https://github.com/jfms7s/opendeck-utilities"
@@ -17,7 +18,13 @@ thiserror = "2"
 log = "0.4"
 simplelog = "0.12"
 base64 = "0.22"
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1.48", features = ["test-util", "macros", "rt"] }
 tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

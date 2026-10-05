@@ -12,7 +12,14 @@ fn devices(list: &[Device]) -> Vec<Value> {
         .collect()
 }
 
-pub fn choices(snap: &Snapshot, settings: &AudioSettings, controller: Controller) -> Value {
+/// `error`: why the device lists may be empty (the property inspector keeps
+/// stored choices it can't see either way).
+pub fn choices(
+    snap: &Snapshot,
+    settings: &AudioSettings,
+    controller: Controller,
+    error: Option<&str>,
+) -> Value {
     let mut seen = HashSet::new();
     let apps: Vec<Value> = snap
         .streams
@@ -30,11 +37,12 @@ pub fn choices(snap: &Snapshot, settings: &AudioSettings, controller: Controller
     let e = effective(settings, controller);
     json!({
         "event": "audioChoices",
-        "controller": match controller { Controller::Keypad => "Keypad", Controller::Encoder => "Encoder" },
+        "controller": controller,
         "outputs": devices(&snap.sinks),
         "inputs": devices(&snap.sources),
         "apps": apps,
         "effective": { "press": e.press, "long_press": e.long_press, "touch_tap": e.touch_tap },
+        "error": error,
     })
 }
 
@@ -49,6 +57,7 @@ mod tests {
             &fixture_snapshot(),
             &AudioSettings::default(),
             Controller::Encoder,
+            None,
         );
         let apps: Vec<&str> = c["apps"]
             .as_array()
@@ -65,6 +74,7 @@ mod tests {
             &fixture_snapshot(),
             &AudioSettings::default(),
             Controller::Encoder,
+            None,
         );
         assert_eq!(c["outputs"].as_array().unwrap().len(), 2);
         assert_eq!(c["inputs"].as_array().unwrap().len(), 1);

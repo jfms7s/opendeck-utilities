@@ -2,26 +2,10 @@
 //! settings. Pure - timing is passed in, not measured here.
 
 use super::settings::{AudioSettings, GestureSetting, OpKind, RotateKind};
+pub use crate::controller::Controller;
 use std::time::Duration;
 
 pub const LONG_PRESS: Duration = Duration::from_millis(500);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Controller {
-    Keypad,
-    Encoder,
-}
-
-impl Controller {
-    /// OpenDeck reports `"Keypad"` or `"Encoder"`.
-    pub fn from_openaction(controller: &str) -> Self {
-        if controller == "Keypad" {
-            Controller::Keypad
-        } else {
-            Controller::Encoder
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
@@ -249,11 +233,5 @@ mod tests {
         );
         assert_eq!(rotate_operation(RotateKind::Volume, 0, 5), Operation::None);
         assert_eq!(rotate_operation(RotateKind::None, 2, 5), Operation::None);
-    }
-
-    #[test]
-    fn controller_from_openaction() {
-        assert_eq!(Controller::from_openaction("Keypad"), Controller::Keypad);
-        assert_eq!(Controller::from_openaction("Encoder"), Controller::Encoder);
     }
 }

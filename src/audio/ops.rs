@@ -1,4 +1,5 @@
 use super::model::Device;
+use crate::cycle::subset_or_all;
 
 /// Applies a volume delta, clamped at 0. Going up never exceeds
 /// `max` - but also never *lowers* a level that is already above `max`
@@ -17,13 +18,9 @@ pub fn adjust_volume(current: u16, delta: i32, max: u16) -> u16 {
 /// then by name). A non-empty `subset` limits it to those names that exist;
 /// if none of them exist any more, all devices are used.
 pub fn cycle_candidates(devices: &[Device], subset: &[String]) -> Vec<String> {
-    let mut chosen: Vec<&Device> = devices
-        .iter()
-        .filter(|d| subset.contains(&d.name))
-        .collect();
-    if chosen.is_empty() {
-        chosen = devices.iter().collect();
-    }
+    let names: Vec<String> = devices.iter().map(|d| d.name.clone()).collect();
+    let names = subset_or_all(&names, subset);
+    let mut chosen: Vec<&Device> = devices.iter().filter(|d| names.contains(&d.name)).collect();
     chosen.sort_by(|a, b| {
         a.description
             .to_lowercase()

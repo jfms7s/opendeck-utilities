@@ -1,18 +1,27 @@
-use crate::lenient::lenient;
-use serde::{Deserialize, Serialize};
+use crate::cycle::subset_or_all;
+use crate::lenient::Fields;
+use crate::render::profile::ProfileView;
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ProfileSettings {
     /// Empty = the device this control is on.
-    #[serde(deserialize_with = "lenient")]
     pub device: String,
     /// Key: profile to switch to.
-    #[serde(deserialize_with = "lenient")]
     pub profile: String,
     /// Dial: profiles to cycle through, in order; empty = all.
-    #[serde(deserialize_with = "lenient")]
     pub cycle: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for ProfileSettings {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let f = Fields::from_deserializer(d)?;
+        let mut s = Self::default();
+        f.read("device", &mut s.device);
+        f.read("profile", &mut s.profile);
+        f.read("cycle", &mut s.cycle);
+        Ok(s)
+    }
 }
 
 pub fn target_device(s: &ProfileSettings, own: &str) -> String {
@@ -25,19 +34,7 @@ pub fn target_device(s: &ProfileSettings, own: &str) -> String {
 }
 
 pub fn cycle_list(all: &[String], subset: &[String]) -> Vec<String> {
-    if subset.is_empty() {
-        all.to_vec()
-    } else {
-        subset.iter().filter(|p| all.contains(p)).cloned().collect()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileView {
-    pub active: Option<String>,
-    pub shown: String,
-    pub is_active: bool,
-    pub hint: String,
+    subset_or_all(all, subset)
 }
 
 pub fn key_view(active: Option<&str>, target: &str) -> ProfileView {
@@ -101,6 +98,27 @@ mod tests {
         let subset = ["gaming", "deleted", "Default"].map(String::from).to_vec();
         assert_eq!(cycle_list(&all(), &subset), vec!["gaming", "Default"]);
         assert_eq!(cycle_list(&all(), &[]), all());
+    }
+
+    #[test]
+    fn stale_subset_falls_back_to_all_profiles() {
+        let subset = ["renamed", "deleted"].map(String::from).to_vec();
+        assert_eq!(cycle_list(&all(), &subset), all());
+    }
+
+    #[test]
+    fn garbled_fields_keep_their_defaults() {
+        let s: ProfileSettings = serde_json::from_value(serde_json::json!({
+            "device": 5, "profile": "gaming", "cycle": "x"
+        }))
+        .unwrap();
+        assert_eq!(
+            s,
+            ProfileSettings {
+                profile: "gaming".into(),
+                ..Default::default()
+            }
+        );
     }
 
     #[test]

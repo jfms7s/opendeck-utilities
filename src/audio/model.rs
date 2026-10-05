@@ -163,7 +163,8 @@ pub fn is_monitor(name: &str) -> bool {
 }
 
 /// Combines the four `pactl -f json` outputs (`info`, `list sinks`,
-/// `list sources`, `list sink-inputs`) into one snapshot.
+/// `list sources`, `list sink-inputs`) into one snapshot. Unparseable
+/// server info or device lists are an error; unparseable streams are not.
 pub fn build_snapshot(
     info: &str,
     sinks: &str,
@@ -173,12 +174,18 @@ pub fn build_snapshot(
     let info: RawInfo = serde_json::from_str(info)?;
     let mut sources = parse_devices(sources)?;
     sources.retain(|d| !is_monitor(&d.name));
+    // One odd app stream must not blank the device controls: streams only
+    // matter to App controls, which then show "not playing".
+    let streams = parse_streams(sink_inputs).unwrap_or_else(|e| {
+        log::warn!("ignoring unparseable app streams: {e}");
+        Vec::new()
+    });
     Ok(Snapshot {
         default_sink: info.default_sink_name,
         default_source: info.default_source_name,
         sinks: parse_devices(sinks)?,
         sources,
-        streams: parse_streams(sink_inputs)?,
+        streams,
     })
 }
 
@@ -253,8 +260,44 @@ mod tests {
     }
 
     #[test]
-    fn malformed_json_is_an_error() {
+    fn malformed_info_or_devices_is_an_error() {
         assert!(build_snapshot("{", "[]", "[]", "[]").is_err());
         assert!(build_snapshot("{}", "not json", "[]", "[]").is_err());
+        assert!(build_snapshot("{}", "[]", "not json", "[]").is_err());
+    }
+
+    #[test]
+    fn malformed_streams_leave_the_devices_usable() {
+        let s = build_snapshot(
+            include_str!("fixtures/info.json"),
+            include_str!("fixtures/sinks.json"),
+            include_str!("fixtures/sources.json"),
+            r#"[{"index": "not a number"}]"#,
+        )
+        .unwrap();
+        assert_eq!(s.sinks.len(), 2);
+        assert!(s.streams.is_empty());
+    }
+
+    /// Real `pactl -f json` output (pactl 17.0, PipeWire 1.6.9), scrubbed of
+    /// serials, user, host and addresses. The hand-written fixtures above
+    /// keep the tests readable; this one proves the parser copes with the
+    /// full property blocks.
+    #[test]
+    fn parses_real_pactl_17_output() {
+        let s = build_snapshot(
+            include_str!("fixtures/pactl-17/info.json"),
+            include_str!("fixtures/pactl-17/sinks.json"),
+            include_str!("fixtures/pactl-17/sources.json"),
+            include_str!("fixtures/pactl-17/sink_inputs.json"),
+        )
+        .unwrap();
+        assert_eq!(s.sinks.len(), 4);
+        assert_eq!(s.sources.len(), 2, "monitors dropped");
+        assert_eq!(s.streams.len(), 1);
+        assert_eq!(s.streams[0].binary, "chrome");
+        let default = s.sinks.iter().find(|d| d.name == s.default_sink).unwrap();
+        assert_eq!(default.description, "Razer Leviathan V2 Analog Stereo");
+        assert!(s.sources.iter().any(|d| d.name == s.default_source));
     }
 }

@@ -20,7 +20,7 @@
 			</div>
 			<div class="field">
 				<label for="value">Value (%)</label>
-				<input id="value" type="number" min="0" max="100" />
+				<input id="value" type="number" />
 				<p class="hint">Used by "Set to value".</p>
 			</div>
 		</section>
@@ -30,11 +30,11 @@
 			<div class="row">
 				<div class="field">
 					<label for="preset_a">Preset A (%)</label>
-					<input id="preset_a" type="number" min="0" max="100" />
+					<input id="preset_a" type="number" />
 				</div>
 				<div class="field">
 					<label for="preset_b">Preset B (%)</label>
-					<input id="preset_b" type="number" min="0" max="100" />
+					<input id="preset_b" type="number" />
 				</div>
 			</div>
 			<p class="hint">Pressing the dial toggles between them.</p>
@@ -44,46 +44,52 @@
 			<h2>Step</h2>
 			<div class="field">
 				<label for="step">Step (%)</label>
-				<input id="step" type="number" min="1" max="50" />
+				<input id="step" type="number" />
 				<p class="hint">Rotating the dial steps the brightness by this much.</p>
 			</div>
-			<div class="status">Stock OpenDeck only accepts brightness changes from its Starter Pack; if nothing happens the control flashes an alert.</div>
+			<div class="status">Changes go through <code>opendeck --process-message</code> (OpenDeck 2.14.0 tested); if one doesn't take effect the control flashes an alert and the plugin log says why.</div>
 		</section>
 	</main>
+	<!-- Defaults and bounds; src/pi_pages.rs checks they match the plugin. -->
+	<script type="application/json" id="defaults">
+	{
+		"settings": { "key_op": "increase", "value": 50, "step": 5, "preset_a": 0, "preset_b": 50 },
+		"bounds": { "value": [0, 100], "step": [1, 50], "preset_a": [0, 100], "preset_b": [0, 100] }
+	}
+	</script>
+	<script src="pi.js"></script>
 	<script>
-		const FIELDS = { key_op: "increase", value: 50, step: 5, preset_a: 0, preset_b: 50 };
+		const DEFAULTS = PI.readJson("defaults");
+		const NUMBERS = Object.keys(DEFAULTS.bounds);
 		const byId = (id) => document.getElementById(id);
-		let websocket, uuid;
 
-		window.connectOpenActionSocketData = new Promise((resolve) => {
-			window.connectOpenActionSocket = (...args) => resolve(args);
-			window.connectElgatoStreamDeckSocket = window.connectOpenActionSocket;
-		});
-		window.connectOpenActionSocketData.then(([inPort, inUUID, inRegisterEvent, inInfo, inActionInfo]) => {
-			uuid = inUUID;
-			const actionInfo = JSON.parse(inActionInfo);
-			byId("key_only").classList.toggle("hidden", actionInfo.payload.controller !== "Keypad");
-			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
-			websocket.onopen = () => {
-				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
-				apply(actionInfo.payload.settings || {});
-			};
-			websocket.onmessage = (event) => {
-				const message = JSON.parse(event.data);
-				if (message.event === "didReceiveSettings") apply(message.payload.settings || {});
-			};
+		const pi = PI.connect({
+			onOpen(payload) {
+				byId("key_only").classList.toggle("hidden", payload.controller !== "Keypad");
+				apply(payload.settings || {});
+			},
+			onSettings: apply,
 		});
 
 		function apply(settings) {
-			for (const [id, fallback] of Object.entries(FIELDS)) byId(id).value = settings[id] ?? fallback;
+			for (const [id, fallback] of Object.entries(DEFAULTS.settings)) byId(id).value = settings[id] ?? fallback;
 		}
 
 		function send() {
 			const payload = { key_op: byId("key_op").value };
-			for (const id of ["value", "step", "preset_a", "preset_b"]) payload[id] = parseInt(byId(id).value, 10) || 0;
-			websocket.send(JSON.stringify({ event: "setSettings", context: uuid, payload }));
+			for (const id of NUMBERS) {
+				payload[id] = PI.clampInt(byId(id).value, DEFAULTS.bounds[id], DEFAULTS.settings[id]);
+				// Show what was saved, not an out-of-range entry.
+				byId(id).value = payload[id];
+			}
+			pi.save(payload);
 		}
-		for (const id of Object.keys(FIELDS)) byId(id).addEventListener("change", send);
+
+		for (const id of NUMBERS) {
+			const [min, max] = DEFAULTS.bounds[id];
+			Object.assign(byId(id), { min, max });
+		}
+		for (const id of Object.keys(DEFAULTS.settings)) byId(id).addEventListener("change", send);
 	</script>
 </body>
 </html>

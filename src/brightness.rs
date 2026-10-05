@@ -2,10 +2,11 @@
 //! resulting value should be, and what the control shows.
 
 use crate::host::BrightnessChange;
-use crate::lenient::lenient;
+use crate::lenient::Fields;
 use crate::render::icons::Icon;
 use crate::render::level::{INACTIVE_COLOR, LevelView};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::ops::RangeInclusive;
 
 pub const BRIGHTNESS_COLOR: &str = "#fbbf24";
 
@@ -19,19 +20,18 @@ pub enum KeyOp {
     TogglePresets,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+/// Brightness values are percentages.
+pub const PERCENT: RangeInclusive<u8> = 0..=100;
+/// Dial/key step, in percentage points.
+pub const STEP: RangeInclusive<u8> = 1..=50;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BrightnessSettings {
-    #[serde(deserialize_with = "lenient")]
     pub step: u8,
-    #[serde(deserialize_with = "lenient")]
     pub key_op: KeyOp,
     /// Target for `KeyOp::Set`.
-    #[serde(deserialize_with = "lenient")]
     pub value: u8,
-    #[serde(deserialize_with = "lenient")]
     pub preset_a: u8,
-    #[serde(deserialize_with = "lenient")]
     pub preset_b: u8,
 }
 
@@ -47,9 +47,22 @@ impl Default for BrightnessSettings {
     }
 }
 
+impl<'de> Deserialize<'de> for BrightnessSettings {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let f = Fields::from_deserializer(d)?;
+        let mut s = Self::default();
+        f.number("step", STEP, &mut s.step);
+        f.read("key_op", &mut s.key_op);
+        f.number("value", PERCENT, &mut s.value);
+        f.number("preset_a", PERCENT, &mut s.preset_a);
+        f.number("preset_b", PERCENT, &mut s.preset_b);
+        Ok(s)
+    }
+}
+
 impl BrightnessSettings {
     fn step(&self) -> u8 {
-        self.step.clamp(1, 50)
+        self.step.clamp(*STEP.start(), *STEP.end())
     }
 }
 
@@ -67,6 +80,16 @@ pub fn apply(current: u8, change: BrightnessChange, value: u8) -> u8 {
         BrightnessChange::Set => value.min(100),
         BrightnessChange::Increase => current.saturating_add(value).min(100),
         BrightnessChange::Decrease => current.saturating_sub(value),
+    }
+}
+
+/// An absolute target: its outcome is always known.
+pub fn set_request(value: u8) -> Request {
+    let value = value.min(*PERCENT.end());
+    Request {
+        change: BrightnessChange::Set,
+        value,
+        expected: Some(value),
     }
 }
 
@@ -94,21 +117,12 @@ pub fn rotate_request(current: Option<u8>, ticks: i16, s: &BrightnessSettings) -
 /// Goes to preset B when currently at preset A, otherwise to preset A.
 pub fn toggle_request(current: Option<u8>, s: &BrightnessSettings) -> Request {
     let (a, b) = (s.preset_a.min(100), s.preset_b.min(100));
-    let target = if current == Some(a) { b } else { a };
-    Request {
-        change: BrightnessChange::Set,
-        value: target,
-        expected: Some(target),
-    }
+    set_request(if current == Some(a) { b } else { a })
 }
 
 pub fn key_request(current: Option<u8>, s: &BrightnessSettings) -> Request {
     match s.key_op {
-        KeyOp::Set => Request {
-            change: BrightnessChange::Set,
-            value: s.value.min(100),
-            expected: Some(s.value.min(100)),
-        },
+        KeyOp::Set => set_request(s.value),
         KeyOp::Increase => request(current, BrightnessChange::Increase, s.step()),
         KeyOp::Decrease => request(current, BrightnessChange::Decrease, s.step()),
         KeyOp::TogglePresets => toggle_request(current, s),
@@ -193,11 +207,43 @@ mod tests {
     }
 
     #[test]
-    fn garbled_settings_fall_back() {
-        let parsed: BrightnessSettings =
-            serde_json::from_value(serde_json::json!({"key_op": "melt", "step": "big"})).unwrap();
-        assert_eq!(parsed.key_op, KeyOp::Increase);
-        assert_eq!(parsed.step(), 1);
+    fn garbled_fields_keep_their_documented_defaults() {
+        let parsed: BrightnessSettings = serde_json::from_value(serde_json::json!({
+            "key_op": "melt", "step": "big", "preset_b": "x", "value": null
+        }))
+        .unwrap();
+        assert_eq!(parsed, BrightnessSettings::default());
+        assert_eq!(parsed.step(), 5);
+    }
+
+    #[test]
+    fn out_of_range_numbers_clamp_instead_of_resetting_to_zero() {
+        // What the PI used to send for a mistyped "300" (QA review): it must
+        // never turn the deck dark.
+        let parsed: BrightnessSettings = serde_json::from_value(serde_json::json!({
+            "key_op": "set", "value": 300, "preset_a": -5, "preset_b": 256, "step": 0
+        }))
+        .unwrap();
+        assert_eq!(
+            (parsed.value, parsed.preset_a, parsed.preset_b, parsed.step),
+            (100, 0, 100, 1)
+        );
+        let r = key_request(Some(70), &parsed);
+        assert_eq!((r.change, r.value), (BrightnessChange::Set, 100));
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let s = BrightnessSettings {
+            step: 7,
+            key_op: KeyOp::TogglePresets,
+            value: 30,
+            preset_a: 10,
+            preset_b: 90,
+        };
+        let back: BrightnessSettings =
+            serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
     }
 
     #[test]
