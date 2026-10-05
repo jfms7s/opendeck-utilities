@@ -12,7 +12,7 @@ in this repo.
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
-node --test tests/                 # property-inspector helpers
+node --test tests/*.test.mjs       # property-inspector helpers
 cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.mjs
 ```
 

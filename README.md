@@ -125,7 +125,7 @@ the OpenDeck, `pactl` and PipeWire versions and the device the checklist passed 
 
 ```bash
 cargo test --locked                          # unit tests (no live audio or OpenDeck needed)
-node --test tests/                           # property-inspector helpers (pi.js)
+node --test tests/*.test.mjs                 # property-inspector helpers (pi.js)
 cargo build --release --locked --target x86_64-unknown-linux-gnu
 node build.mjs                               # packages every built target into dist/<uuid>.sdPlugin
 ```
