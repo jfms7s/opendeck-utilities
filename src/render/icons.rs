@@ -1,9 +1,11 @@
 //! Small glyphs drawn in a 100x100 box: used inside key tiles and, wrapped
 //! in their own `<svg>`, as the touch-strip `icon` pixmap.
 
+use super::level::MUTED_COLOR;
 use super::tile::{data_uri, escape_xml};
 
-pub const STRIKE_COLOR: &str = "#ef4444";
+/// The strike through a muted icon uses the "muted" colour.
+pub const STRIKE_COLOR: &str = MUTED_COLOR;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Icon {

@@ -1,0 +1,65 @@
+[
+ {
+  "index": 18346,
+  "driver": "PipeWire",
+  "owner_module": null,
+  "client": "18345",
+  "sink": 10537,
+  "sample_specification": "float32le 2ch 48000Hz",
+  "channel_map": "front-left,front-right",
+  "format": "pcm, format.sample_format = \"\\\"float32le\\\"\"  format.rate = \"48000\"  format.channels = \"2\"  format.channel_map = \"\\\"front-left,front-right\\\"\"",
+  "corked": false,
+  "mute": false,
+  "volume": {
+   "front-left": {
+    "value": 65536,
+    "value_percent": "100%",
+    "db": "0.00 dB"
+   },
+   "front-right": {
+    "value": 65536,
+    "value_percent": "100%",
+    "db": "0.00 dB"
+   }
+  },
+  "balance": 0.0,
+  "buffer_latency_usec": 0.0,
+  "sink_latency_usec": 0.0,
+  "resample_method": "PipeWire",
+  "properties": {
+   "client.api": "pipewire-pulse",
+   "pulse.server.type": "unix",
+   "application.name": "Google Chrome",
+   "application.process.user": "user",
+   "application.process.host": "example-host",
+   "application.process.binary": "chrome",
+   "application.language": "en_US.UTF-8",
+   "application.icon_name": "google-chrome",
+   "media.name": "Playback",
+   "pulse.corked": "false",
+   "node.rate": "1/48000",
+   "node.latency": "1024/48000",
+   "stream.is-live": "true",
+   "node.name": "Google Chrome",
+   "node.want-driver": "true",
+   "node.autoconnect": "true",
+   "media.class": "Stream/Output/Audio",
+   "port.group": "stream.0",
+   "adapt.follower.spa-node": "",
+   "object.register": "false",
+   "factory.id": "7",
+   "clock.quantum-limit": "8192",
+   "node.loop.name": "data-loop.0",
+   "library.name": "audioconvert/libspa-audioconvert",
+   "client.id": "148",
+   "object.id": "93",
+   "object.serial": "18346",
+   "pulse.attr.maxlength": "4194304",
+   "pulse.attr.tlength": "16384",
+   "pulse.attr.prebuf": "12296",
+   "pulse.attr.minreq": "4096",
+   "node.driver-id": "145",
+   "module-stream-restore.id": "sink-input-by-application-name:Google Chrome"
+  }
+ }
+]

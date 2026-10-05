@@ -35,45 +35,36 @@
 		</section>
 	</main>
 
+	<script src="pi.js"></script>
 	<script>
 		const byId = (id) => document.getElementById(id);
-		let websocket, uuid, settings = {}, profiles = [];
+		let settings = {}, profiles = [];
 
-		window.connectOpenActionSocketData = new Promise((resolve) => {
-			window.connectOpenActionSocket = (...args) => resolve(args);
-			window.connectElgatoStreamDeckSocket = window.connectOpenActionSocket;
-		});
-		window.connectOpenActionSocketData.then(([inPort, inUUID, inRegisterEvent, inInfo, inActionInfo]) => {
-			uuid = inUUID;
-			const actionInfo = JSON.parse(inActionInfo);
-			const isKey = actionInfo.payload.controller === "Keypad";
-			byId("key_only").classList.toggle("hidden", !isKey);
-			byId("dial_only").classList.toggle("hidden", isKey);
-			settings = actionInfo.payload.settings || {};
-			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
-			websocket.onopen = () => {
-				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
-				// Ask again once registered: the plugin's first push can arrive too early.
-				websocket.send(JSON.stringify({ event: "sendToPlugin", action: actionInfo.action, context: inUUID, payload: { event: "requestChoices" } }));
+		const pi = PI.connect({
+			onOpen(payload) {
+				const isKey = payload.controller === "Keypad";
+				byId("key_only").classList.toggle("hidden", !isKey);
+				byId("dial_only").classList.toggle("hidden", isKey);
+				settings = payload.settings || {};
+				pi.requestChoices();
 				render();
-			};
-			websocket.onmessage = (event) => {
-				const message = JSON.parse(event.data);
-				if (message.event === "didReceiveSettings") {
-					settings = message.payload.settings || {};
-					render();
-				} else if (message.event === "sendToPropertyInspector" && message.payload?.event === "profileChoices") {
-					profiles = message.payload.profiles || [];
-					const list = byId("devices");
-					list.replaceChildren();
-					for (const id of message.payload.devices || []) {
-						const option = document.createElement("option");
-						option.value = id;
-						list.appendChild(option);
-					}
-					render();
+			},
+			onSettings(next) {
+				settings = next;
+				render();
+			},
+			onMessage(payload) {
+				if (payload.event !== "profileChoices") return;
+				profiles = payload.profiles || [];
+				const list = byId("devices");
+				list.replaceChildren();
+				for (const id of payload.devices || []) {
+					const option = document.createElement("option");
+					option.value = id;
+					list.appendChild(option);
 				}
-			};
+				render();
+			},
 		});
 
 		function render() {
@@ -105,17 +96,18 @@
 		}
 
 		function send() {
+			const boxes = Array.from(document.querySelectorAll("#cycle input"));
 			settings = {
 				device: byId("device").value.trim(),
 				profile: byId("profile").value,
-				// Keep the user's dial order: previously chosen first, then newly ticked.
-				cycle: (() => {
-					const ticked = Array.from(document.querySelectorAll("#cycle input:checked")).map((b) => b.value);
-					const kept = (settings.cycle || []).filter((p) => ticked.includes(p));
-					return [...kept, ...ticked.filter((p) => !kept.includes(p))];
-				})(),
+				// Keeps the user's dial order, and profiles not listed right now.
+				cycle: PI.mergeSubset(
+					settings.cycle,
+					boxes.map((b) => b.value),
+					boxes.filter((b) => b.checked).map((b) => b.value),
+				),
 			};
-			websocket.send(JSON.stringify({ event: "setSettings", context: uuid, payload: settings }));
+			pi.save(settings);
 		}
 		byId("device").addEventListener("change", send);
 		byId("profile").addEventListener("change", send);

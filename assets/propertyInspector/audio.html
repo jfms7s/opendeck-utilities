@@ -31,7 +31,7 @@
 			<div class="row">
 				<div class="field">
 					<label for="step">Volume step (%)</label>
-					<input id="step" type="number" min="1" max="20" />
+					<input id="step" type="number" />
 				</div>
 				<div class="field">
 					<label for="max_volume">Maximum volume</label>
@@ -80,55 +80,70 @@
 
 	<datalist id="device_names"></datalist>
 
-	<script>
-		const OPS = [
+	<!-- Defaults and bounds; src/pi_pages.rs checks they match the plugin. -->
+	<script type="application/json" id="defaults">
+	{
+		"settings": {
+			"target": "default_output",
+			"target_name": "",
+			"step": 5,
+			"max_volume": 100,
+			"rotate": "volume",
+			"cycle_devices": [],
+			"label": "",
+			"accent": "#4fc3f7",
+			"show_percent": true
+		},
+		"bounds": { "step": [1, 20], "max_volume": [100, 150], "gesture_volume": [0, 150] },
+		"gestures": {
+			"Keypad": {
+				"press": { "op": "toggle_mute", "volume": 50, "device": "" },
+				"long_press": { "op": "none", "volume": 50, "device": "" },
+				"touch_tap": { "op": "none", "volume": 50, "device": "" }
+			},
+			"Encoder": {
+				"press": { "op": "toggle_mute", "volume": 50, "device": "" },
+				"long_press": { "op": "cycle_device", "volume": 50, "device": "" },
+				"touch_tap": { "op": "toggle_mute", "volume": 50, "device": "" }
+			}
+		},
+		"ops": [
 			["none", "Nothing"], ["toggle_mute", "Toggle mute"], ["volume_up", "Volume up"],
 			["volume_down", "Volume down"], ["set_volume", "Set volume to…"], ["cycle_device", "Switch to next device"],
-			["set_default_device", "Switch to device…"], ["push_to_talk", "Push to talk (hold)"],
-		];
+			["set_default_device", "Switch to device…"], ["push_to_talk", "Push to talk (hold)"]
+		]
+	}
+	</script>
+	<script src="pi.js"></script>
+	<script>
+		const DEFAULTS = PI.readJson("defaults");
 		const SLOTS = [["press", "Press"], ["long_press", "Long press (hold ½ s)"], ["touch_tap", "Touch-strip tap"]];
 		const byId = (id) => document.getElementById(id);
-		// Mirrors gesture::effective in src/audio/gesture.rs, used until the plugin's choices arrive.
-		const gesture = (op) => ({ op, volume: 50, device: "" });
-		const DEFAULT_GESTURES = {
-			Keypad: { press: gesture("toggle_mute"), long_press: gesture("none"), touch_tap: gesture("none") },
-			Encoder: { press: gesture("toggle_mute"), long_press: gesture("cycle_device"), touch_tap: gesture("toggle_mute") },
-		};
 
-		let websocket, uuid, controller = "Keypad", settings = {}, choices = null;
+		let controller = "Keypad", settings = {}, choices = null;
 
-		window.connectOpenActionSocketData = new Promise((resolve) => {
-			window.connectOpenActionSocket = (...args) => resolve(args);
-			window.connectElgatoStreamDeckSocket = window.connectOpenActionSocket;
-		});
-
-		window.connectOpenActionSocketData.then(([inPort, inUUID, inRegisterEvent, inInfo, inActionInfo]) => {
-			uuid = inUUID;
-			const actionInfo = JSON.parse(inActionInfo);
-			controller = actionInfo.payload.controller || "Keypad";
-			settings = actionInfo.payload.settings || {};
-			websocket = new WebSocket(`ws://127.0.0.1:${inPort}`);
-			websocket.onopen = () => {
-				websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
-				// Ask again once registered: the plugin's first push can arrive too early.
-				websocket.send(JSON.stringify({ event: "sendToPlugin", action: actionInfo.action, context: inUUID, payload: { event: "requestChoices" } }));
+		const pi = PI.connect({
+			onOpen(payload) {
+				controller = payload.controller || "Keypad";
+				settings = payload.settings || {};
+				pi.requestChoices();
 				render();
-			};
-			websocket.onmessage = (event) => {
-				const message = JSON.parse(event.data);
-				if (message.event === "didReceiveSettings") {
-					settings = message.payload.settings || {};
-					render();
-				} else if (message.event === "sendToPropertyInspector" && message.payload?.event === "audioChoices") {
-					choices = message.payload;
-					controller = choices.controller || controller;
-					render();
-				}
-			};
+			},
+			onSettings(next) {
+				settings = next;
+				render();
+			},
+			onMessage(payload) {
+				if (payload.event !== "audioChoices") return;
+				choices = payload;
+				controller = choices.controller || controller;
+				render();
+			},
 		});
 
 		function gestureValue(slot) {
-			return settings[slot] ?? choices?.effective?.[slot] ?? DEFAULT_GESTURES[controller === "Keypad" ? "Keypad" : "Encoder"][slot];
+			// The plugin's effective gestures win over this page's copy of the defaults.
+			return settings[slot] ?? choices?.effective?.[slot] ?? DEFAULTS.gestures[controller === "Keypad" ? "Keypad" : "Encoder"][slot];
 		}
 
 		function field(slot, name) {
@@ -138,6 +153,7 @@
 		function buildGestures() {
 			const root = byId("gestures");
 			root.replaceChildren();
+			const [minVolume, maxVolume] = DEFAULTS.bounds.gesture_volume;
 			for (const [slot, title] of SLOTS) {
 				if (slot === "touch_tap" && controller !== "Encoder") continue;
 				const label = document.createElement("label");
@@ -145,7 +161,7 @@
 				const select = document.createElement("select");
 				select.dataset.slot = slot;
 				select.dataset.field = "op";
-				for (const [value, text] of OPS) {
+				for (const [value, text] of DEFAULTS.ops) {
 					if (value === "push_to_talk" && slot !== "press") continue;
 					const option = document.createElement("option");
 					option.value = value;
@@ -153,7 +169,7 @@
 					select.appendChild(option);
 				}
 				const volume = document.createElement("input");
-				Object.assign(volume, { type: "number", min: 0, max: 150, placeholder: "Volume %" });
+				Object.assign(volume, { type: "number", min: minVolume, max: maxVolume, placeholder: "Volume %" });
 				volume.className = "narrow";
 				volume.dataset.slot = slot;
 				volume.dataset.field = "volume";
@@ -229,14 +245,15 @@
 		}
 
 		function render() {
-			byId("target").value = settings.target || "default_output";
-			byId("target_name").value = settings.target_name || "";
-			byId("step").value = settings.step ?? 5;
-			byId("max_volume").value = String(settings.max_volume ?? 100);
-			byId("rotate").value = settings.rotate || "volume";
-			byId("label").value = settings.label || "";
-			byId("accent").value = /^#[0-9a-fA-F]{6}$/.test(settings.accent || "") ? settings.accent : "#4fc3f7";
-			byId("show_percent").checked = settings.show_percent ?? true;
+			const d = DEFAULTS.settings;
+			byId("target").value = settings.target || d.target;
+			byId("target_name").value = settings.target_name || d.target_name;
+			byId("step").value = settings.step ?? d.step;
+			byId("max_volume").value = String(settings.max_volume ?? d.max_volume);
+			byId("rotate").value = settings.rotate || d.rotate;
+			byId("label").value = settings.label || d.label;
+			byId("accent").value = /^#[0-9a-fA-F]{6}$/.test(settings.accent || "") ? settings.accent : d.accent;
+			byId("show_percent").checked = settings.show_percent ?? d.show_percent;
 			document.querySelectorAll(".encoder-only").forEach((el) => el.classList.toggle("hidden", controller !== "Encoder"));
 			buildGestures();
 			for (const [slot] of SLOTS) {
@@ -244,7 +261,7 @@
 				if (!select) continue;
 				const g = gestureValue(slot);
 				select.value = g.op;
-				field(slot, "volume").value = g.volume ?? 50;
+				field(slot, "volume").value = g.volume ?? DEFAULTS.gestures.Keypad.press.volume;
 				field(slot, "device").value = g.device || "";
 				toggleGestureFields(slot);
 			}
@@ -253,16 +270,22 @@
 		}
 
 		function collect() {
+			const d = DEFAULTS.settings;
+			const boxes = Array.from(document.querySelectorAll("#cycle_devices input"));
 			const next = {
 				target: byId("target").value,
 				target_name: byId("target_name").value.trim(),
-				step: parseInt(byId("step").value, 10) || 5,
-				max_volume: parseInt(byId("max_volume").value, 10) || 100,
+				step: PI.clampInt(byId("step").value, DEFAULTS.bounds.step, d.step),
+				max_volume: PI.clampInt(byId("max_volume").value, DEFAULTS.bounds.max_volume, d.max_volume),
 				rotate: byId("rotate").value,
 				label: byId("label").value,
 				accent: byId("accent").value,
 				show_percent: byId("show_percent").checked,
-				cycle_devices: Array.from(document.querySelectorAll("#cycle_devices input:checked")).map((b) => b.value),
+				cycle_devices: PI.mergeSubset(
+					settings.cycle_devices,
+					boxes.map((b) => b.value),
+					boxes.filter((b) => b.checked).map((b) => b.value),
+				),
 			};
 			for (const [slot] of SLOTS) {
 				const select = field(slot, "op");
@@ -273,7 +296,7 @@
 				}
 				next[slot] = {
 					op: select.value,
-					volume: parseInt(field(slot, "volume").value, 10) || 0,
+					volume: PI.clampInt(field(slot, "volume").value, DEFAULTS.bounds.gesture_volume, DEFAULTS.gestures.Keypad.press.volume),
 					device: field(slot, "device").value.trim(),
 				};
 			}
@@ -285,9 +308,11 @@
 			for (const [slot] of SLOTS) toggleGestureFields(slot);
 			updateTargetName();
 			fillCycle();
-			websocket.send(JSON.stringify({ event: "setSettings", context: uuid, payload: settings }));
+			pi.save(settings);
 		}
 
+		const [minStep, maxStep] = DEFAULTS.bounds.step;
+		Object.assign(byId("step"), { min: minStep, max: maxStep });
 		for (const id of ["target", "target_name", "step", "max_volume", "rotate", "label", "accent", "show_percent"]) {
 			byId(id).addEventListener("change", onChange);
 		}

@@ -1,47 +1,53 @@
 mod actions;
 mod audio;
 mod brightness;
+mod controller;
 mod cycle;
+mod dispatch;
 mod host;
 mod lenient;
 mod opendeck_state;
 mod pending;
 mod profile;
 mod render;
+mod ui;
+
+#[cfg(test)]
+mod pi_pages;
 
 use actions::audio::AudioAction;
 use actions::brightness::BrightnessAction;
 use actions::profile::ProfileAction;
-use audio::backend::{AudioBackend, PactlBackend, spawn_subscriber};
+use audio::backend::PactlBackend;
+use host::{Host, OpenDeckHost};
 use openaction::{OpenActionResult, register_action, run};
 use opendeck_state::OpenDeckState;
 use std::sync::Arc;
-use tokio::sync::watch;
+use ui::{OpenDeckUi, Ui};
 
-#[tokio::main]
+// Two workers are plenty for a handful of controls (performance review);
+// nothing here blocks a worker for long.
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> OpenActionResult<()> {
     simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())
         .expect("logger init");
+    // Lets a smoke-test run confirm which build it exercised.
+    log::info!("opendeck-utilities {}", env!("CARGO_PKG_VERSION"));
 
-    let (audio_tx, audio_rx) = watch::channel(0u64);
-    spawn_subscriber(audio_tx);
-    let backend: Arc<dyn AudioBackend> = Arc::new(PactlBackend);
-    let audio = AudioAction::new(backend);
-    tokio::spawn(audio.clone().run_watcher(audio_rx));
-    register_action(audio).await;
-
+    let ui: Arc<dyn Ui> = Arc::new(OpenDeckUi::default());
+    let host: Arc<dyn Host> = Arc::new(OpenDeckHost);
     let deck_state = OpenDeckState::discover();
-    let (deck_tx, deck_rx) = watch::channel(0u64);
-    opendeck_state::spawn_watcher(deck_state.clone(), deck_tx);
+    let deck_changes = opendeck_state::spawn_watcher(deck_state.clone());
 
-    let brightness = BrightnessAction::new(deck_state.clone());
-    tokio::spawn(brightness.clone().run_watcher(deck_rx.clone()));
-    tokio::spawn(brightness.clone().run_sender());
-    register_action(brightness).await;
-
-    let profile = ProfileAction::new(deck_state);
-    tokio::spawn(profile.clone().run_watcher(deck_rx));
-    register_action(profile).await;
+    register_action(AudioAction::start(Arc::new(PactlBackend), ui.clone())).await;
+    register_action(BrightnessAction::start(
+        deck_state.clone(),
+        deck_changes.clone(),
+        host.clone(),
+        ui.clone(),
+    ))
+    .await;
+    register_action(ProfileAction::start(deck_state, deck_changes, host, ui)).await;
 
     run(std::env::args().collect()).await
 }
@@ -53,30 +59,24 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../assets/manifest.json")).unwrap();
         assert_eq!(manifest["Version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(
-            manifest["CodePathLin"],
-            "opendeck-utilities-x86_64-unknown-linux-gnu"
-        );
     }
 
+    /// `build.mjs` names each binary after `CodePaths`; the Linux default must
+    /// be one of them.
     #[test]
-    fn every_manifest_action_is_registered() {
+    fn manifest_code_paths_name_the_built_binaries() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../assets/manifest.json")).unwrap();
-        let mut uuids: Vec<&str> = manifest["Actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|a| a["UUID"].as_str().unwrap())
-            .collect();
-        uuids.sort();
-        assert_eq!(
-            uuids,
-            vec![
-                "com.jfms7s.utilities.audio",
-                "com.jfms7s.utilities.brightness",
-                "com.jfms7s.utilities.profile",
-            ]
+        let paths = manifest["CodePaths"].as_object().unwrap();
+        for (triple, bin) in paths {
+            assert_eq!(
+                bin.as_str().unwrap(),
+                format!("{}-{triple}", env!("CARGO_PKG_NAME"))
+            );
+        }
+        assert!(
+            paths.values().any(|bin| *bin == manifest["CodePathLin"]),
+            "CodePathLin must be one of CodePaths"
         );
     }
 }

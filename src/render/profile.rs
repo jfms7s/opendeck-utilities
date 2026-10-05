@@ -1,7 +1,15 @@
 use super::text::shorten;
 use super::tile::{self, MUTED_TEXT_COLOR, TEXT_COLOR};
-use crate::profile::ProfileView;
 use serde_json::{Value, json};
+
+/// What a Switch Profile control shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileView {
+    pub active: Option<String>,
+    pub shown: String,
+    pub is_active: bool,
+    pub hint: String,
+}
 
 pub const ACTIVE_COLOR: &str = "#22c55e";
 
@@ -37,7 +45,21 @@ pub fn tile_image(view: &ProfileView) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::key_view;
+
+    fn key_view(active: Option<&str>, shown: &str) -> ProfileView {
+        let is_active = active == Some(shown);
+        ProfileView {
+            active: active.map(str::to_string),
+            shown: shown.to_string(),
+            is_active,
+            hint: if is_active {
+                "active"
+            } else {
+                "press to switch"
+            }
+            .to_string(),
+        }
+    }
 
     #[test]
     fn feedback_keys_match_the_shipped_layout() {

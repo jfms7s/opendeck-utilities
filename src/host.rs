@@ -2,21 +2,30 @@
 //! `switchProfile`/`deviceBrightness` sent over a plugin's websocket unless
 //! the plugin is the Starter Pack (src-tauri/src/events/inbound/mod.rs), but
 //! `opendeck --process-message <json>` hands the event to the running
-//! instance without that check. Callers still confirm the effect by
-//! re-reading OpenDeck's state and warn when it never arrives.
+//! instance without that check. `crate::dispatch` sends through `Host` and
+//! confirms the effect by re-reading OpenDeck's state.
 
+use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, Once};
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 pub const CONFIRM_TIMEOUT: Duration = Duration::from_millis(1500);
-const CONFIRM_POLL: Duration = Duration::from_millis(100);
+/// Safety net while waiting for a confirmation: the state watcher normally
+/// wakes the wait as soon as OpenDeck writes its files.
+const CONFIRM_RECHECK: Duration = Duration::from_millis(500);
 
-static WARNED: AtomicBool = AtomicBool::new(false);
+static WARNED_IGNORED: AtomicBool = AtomicBool::new(false);
+static WARNED_ONCE: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+static LOGGED_PROGRAM: Once = Once::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,28 +43,67 @@ pub fn switch_profile_event(device: &str, profile: &str) -> Value {
     json!({ "event": "switchProfile", "device": device, "profile": profile })
 }
 
-/// Delivers `event` through OpenDeck's command line; if that can't run,
-/// falls back to the plugin websocket (honoured only by patched hosts).
-pub async fn send(event: Value) -> openaction::OpenActionResult<()> {
-    let parent =
-        std::fs::read_link(format!("/proc/{}/exe", std::os::unix::process::parent_id())).ok();
-    let program = opendeck_program(parent);
-    let status = tokio::process::Command::new(&program)
-        .args(process_message_args(&event))
+/// Where host events go. `OpenDeckHost` in the plugin; a recording fake in
+/// tests.
+#[async_trait]
+pub trait Host: Send + Sync {
+    async fn send(&self, event: Value) -> Result<(), String>;
+}
+
+pub struct OpenDeckHost;
+
+#[async_trait]
+impl Host for OpenDeckHost {
+    async fn send(&self, event: Value) -> Result<(), String> {
+        let parent =
+            std::fs::read_link(format!("/proc/{}/exe", std::os::unix::process::parent_id())).ok();
+        let program = opendeck_program(parent);
+        LOGGED_PROGRAM.call_once(|| {
+            log::info!("sending host events through {}", program.display());
+        });
+        send_via(&program, event, openaction::send_arbitrary_json)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Delivers `event` through `program --process-message`; only if that
+/// can't run does it fall back to `websocket` (honoured by patched hosts only).
+async fn send_via<F, Fut>(
+    program: &Path,
+    event: Value,
+    websocket: F,
+) -> openaction::OpenActionResult<()>
+where
+    F: FnOnce(Value) -> Fut,
+    Fut: Future<Output = openaction::OpenActionResult<()>>,
+{
+    match process_message(program, &event).await {
+        Ok(()) => Ok(()),
+        Err(why) => {
+            log::warn!(
+                "{} --process-message failed ({why}); sending over the websocket instead",
+                program.display()
+            );
+            websocket(event).await
+        }
+    }
+}
+
+async fn process_message(program: &Path, event: &Value) -> Result<(), String> {
+    let status = tokio::process::Command::new(program)
+        .args(process_message_args(event))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .status()
-        .await;
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        other => {
-            log::warn!(
-                "{} --process-message failed ({other:?}); sending over the websocket instead",
-                program.display()
-            );
-            openaction::send_arbitrary_json(event).await
-        }
+        .await
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(status.to_string())
     }
 }
 
@@ -74,31 +122,36 @@ fn process_message_args(event: &Value) -> [String; 2] {
     ["--process-message".to_string(), event.to_string()]
 }
 
-/// Polls `read` until it returns `expected` or `timeout` passes.
-pub async fn wait_for<T: PartialEq>(
-    expected: &T,
-    mut read: impl FnMut() -> Option<T>,
+/// Waits until `done` returns true or `timeout` passes. It re-checks
+/// whenever `changes` ticks (OpenDeck's files changed) and, as a safety
+/// net, every `CONFIRM_RECHECK`.
+pub async fn wait_until(
+    mut done: impl FnMut() -> bool,
+    changes: &mut watch::Receiver<u64>,
     timeout: Duration,
 ) -> bool {
-    wait_until(|| read().as_ref() == Some(expected), timeout).await
-}
-
-/// Polls `done` until it returns true or `timeout` passes.
-pub async fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
+    let mut watching = true;
     loop {
         if done() {
             return true;
         }
-        if Instant::now() >= deadline {
+        let now = Instant::now();
+        if now >= deadline {
             return false;
         }
-        tokio::time::sleep(CONFIRM_POLL).await;
+        let recheck = (now + CONFIRM_RECHECK).min(deadline);
+        tokio::select! {
+            changed = changes.changed(), if watching => watching = changed.is_ok(),
+            _ = tokio::time::sleep_until(recheck) => {}
+        }
     }
 }
 
+/// For a host request whose effect never showed up although OpenDeck's state
+/// could be read - the one case that points at the sending route.
 pub fn warn_ignored_once() {
-    if !WARNED.swap(true, Ordering::SeqCst) {
+    if !WARNED_IGNORED.swap(true, Ordering::SeqCst) {
         log::warn!(
             "OpenDeck ignored a brightness/profile request: check that `opendeck --process-message` \
              works on this install (see README)"
@@ -106,10 +159,67 @@ pub fn warn_ignored_once() {
     }
 }
 
+/// Logs `message` the first time `key` is seen in this run.
+pub fn warn_once(key: &'static str, message: impl FnOnce() -> String) {
+    let mut seen = WARNED_ONCE.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.get_or_insert_with(HashSet::new).insert(key) {
+        let message = message();
+        log::warn!("{message}");
+    }
+}
+
+#[cfg(test)]
+pub mod fake {
+    use super::*;
+    use std::sync::Arc;
+
+    type OnSend = Box<dyn Fn(&Value) + Send + Sync>;
+
+    /// Records every event; `on_send` plays OpenDeck's part (e.g. writes
+    /// the state file the request should change).
+    pub struct FakeHost {
+        pub sent: Mutex<Vec<Value>>,
+        pub fail: AtomicBool,
+        on_send: OnSend,
+    }
+
+    impl FakeHost {
+        pub fn new(on_send: impl Fn(&Value) + Send + Sync + 'static) -> Arc<Self> {
+            Arc::new(Self {
+                sent: Mutex::new(Vec::new()),
+                fail: AtomicBool::new(false),
+                on_send: Box::new(on_send),
+            })
+        }
+
+        /// OpenDeck receives the event but does nothing.
+        pub fn ignoring() -> Arc<Self> {
+            Self::new(|_| {})
+        }
+
+        pub fn sent(&self) -> Vec<Value> {
+            self.sent.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl Host for FakeHost {
+        async fn send(&self, event: Value) -> Result<(), String> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err("opendeck not runnable".to_string());
+            }
+            (self.on_send)(&event);
+            self.sent.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;
+    use std::sync::Arc;
 
     #[test]
     fn event_shapes_match_opendeck() {
@@ -150,47 +260,93 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(&args[1]).ok(), Some(e));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn wait_for_sees_a_change_before_the_timeout() {
-        let calls = Cell::new(0);
-        let ok = wait_for(
-            &7,
-            || {
-                calls.set(calls.get() + 1);
-                (calls.get() >= 3).then_some(7)
-            },
-            CONFIRM_TIMEOUT,
-        )
-        .await;
-        assert!(ok);
+    /// Runs `send_via` against `program`, reporting whether the websocket
+    /// fallback was used.
+    async fn used_websocket(program: &str) -> bool {
+        let used = Arc::new(AtomicBool::new(false));
+        let flag = used.clone();
+        send_via(Path::new(program), json!({"event": "x"}), |_| async move {
+            flag.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        used.load(Ordering::SeqCst)
+    }
+
+    /// The e3ec46b route: a command that exits 0 delivered the event, so the
+    /// websocket (which stock OpenDeck drops) must not be used.
+    #[tokio::test]
+    async fn a_successful_command_does_not_touch_the_websocket() {
+        assert!(!used_websocket("/bin/true").await);
+    }
+
+    #[tokio::test]
+    async fn a_failing_or_missing_command_falls_back_to_the_websocket() {
+        assert!(used_websocket("/bin/false").await);
+        assert!(used_websocket("/nonexistent/opendeck").await);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn wait_until_sees_a_change_before_the_timeout() {
+    async fn wait_until_wakes_on_a_change_before_the_timeout() {
+        let (tx, mut rx) = watch::channel(0u64);
         let calls = Cell::new(0);
+        let start = Instant::now();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            tx.send_modify(|n| *n += 1);
+            // Keep the sender alive past the wait.
+            tokio::time::sleep(CONFIRM_TIMEOUT).await;
+        });
         let ok = wait_until(
             || {
                 calls.set(calls.get() + 1);
-                calls.get() >= 3
+                calls.get() >= 2
             },
+            &mut rx,
             CONFIRM_TIMEOUT,
         )
         .await;
         assert!(ok);
-        assert_eq!(calls.get(), 3);
+        assert_eq!(calls.get(), 2, "one check up front, one on the change");
+        assert!(start.elapsed() < CONFIRM_RECHECK);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn wait_until_gives_up_after_the_timeout() {
+    async fn wait_until_gives_up_after_the_timeout_with_few_reads() {
+        let (_tx, mut rx) = watch::channel(0u64);
+        let calls = Cell::new(0);
         let start = Instant::now();
-        assert!(!wait_until(|| false, CONFIRM_TIMEOUT).await);
+        let ok = wait_until(
+            || {
+                calls.set(calls.get() + 1);
+                false
+            },
+            &mut rx,
+            CONFIRM_TIMEOUT,
+        )
+        .await;
+        assert!(!ok);
         assert!(start.elapsed() >= CONFIRM_TIMEOUT);
+        assert!(calls.get() <= 5, "{} reads", calls.get());
     }
 
     #[tokio::test(start_paused = true)]
-    async fn wait_for_gives_up_after_the_timeout() {
-        let start = Instant::now();
-        assert!(!wait_for(&7, || Some(1), CONFIRM_TIMEOUT).await);
-        assert!(start.elapsed() >= CONFIRM_TIMEOUT);
+    async fn wait_until_survives_a_closed_change_channel() {
+        let (tx, mut rx) = watch::channel(0u64);
+        drop(tx);
+        assert!(!wait_until(|| false, &mut rx, CONFIRM_TIMEOUT).await);
+    }
+
+    #[test]
+    fn warn_once_runs_the_message_once_per_key() {
+        let built = Cell::new(0);
+        for _ in 0..3 {
+            warn_once("host::tests", || {
+                built.set(built.get() + 1);
+                "x".to_string()
+            });
+        }
+        assert_eq!(built.get(), 1);
     }
 }

@@ -115,6 +115,70 @@ async fn execute_on_app(
     }
 }
 
+/// What `op` leaves a level at, given its current `volume` and `muted`;
+/// `None` for operations that switch devices instead. Mirrors the
+/// arithmetic `execute` sends to the backend.
+fn predicted(
+    volume: u16,
+    muted: bool,
+    settings: &AudioSettings,
+    op: &Operation,
+) -> Option<(u16, bool)> {
+    let max = settings.max_volume();
+    match op {
+        Operation::None => Some((volume, muted)),
+        Operation::ToggleMute => Some((volume, !muted)),
+        Operation::SetMute(m) => Some((volume, *m)),
+        Operation::AdjustVolume(delta) => Some((adjust_volume(volume, *delta, max), muted)),
+        Operation::SetVolume(v) => Some(((*v).min(max), muted)),
+        Operation::CycleDevice(_) | Operation::SetDefaultDevice(_) => None,
+    }
+}
+
+/// Updates `snap` to what a successful `execute` of `op` on `resolved` just
+/// did, so the next dial tick builds on it without re-reading pactl.
+/// Returns false when it can't tell (device switching): refresh instead.
+pub fn apply_locally(
+    snap: &mut Snapshot,
+    resolved: &Resolved,
+    settings: &AudioSettings,
+    op: &Operation,
+) -> bool {
+    match resolved {
+        Resolved::Device { kind, device } => {
+            let Some((volume, muted)) = predicted(device.volume, device.muted, settings, op) else {
+                return false;
+            };
+            let list = match kind {
+                DeviceKind::Output => &mut snap.sinks,
+                DeviceKind::Input => &mut snap.sources,
+            };
+            let Some(d) = list.iter_mut().find(|d| d.name == device.name) else {
+                return false;
+            };
+            (d.volume, d.muted) = (volume, muted);
+            true
+        }
+        Resolved::App { streams } => {
+            let Some(first) = streams.first() else {
+                return true;
+            };
+            let Some((volume, muted)) = predicted(first.volume, first.muted, settings, op) else {
+                return false;
+            };
+            for s in snap
+                .streams
+                .iter_mut()
+                .filter(|s| streams.iter().any(|x| x.index == s.index))
+            {
+                (s.volume, s.muted) = (volume, muted);
+            }
+            true
+        }
+        Resolved::Unavailable { .. } | Resolved::NotPlaying { .. } => true,
+    }
+}
+
 async fn set_all_mute(
     backend: &dyn AudioBackend,
     streams: &[Stream],
@@ -318,6 +382,63 @@ mod tests {
         .await;
         assert!(matches!(r, Err(BackendError::NoTarget)));
         assert!(calls.is_empty());
+    }
+
+    /// Partial application is not rolled back: the error is returned (the
+    /// action alerts and re-reads the real state) and the calls made stay.
+    #[tokio::test]
+    async fn a_failure_mid_app_stops_and_reports() {
+        let snap = fixture_snapshot();
+        let fake = FakeBackend::new(snap.clone());
+        fake.fail("mute", 1);
+        let resolved = resolve(TargetKind::App, "chrome", &snap);
+        let r = execute(
+            &fake,
+            &snap,
+            &resolved,
+            &AudioSettings::default(),
+            &Operation::SetMute(true),
+        )
+        .await;
+        assert!(matches!(r, Err(BackendError::Failed { .. })), "{r:?}");
+        assert_eq!(
+            fake.calls(),
+            vec!["mute SinkInput(100) On", "mute SinkInput(101) On"]
+        );
+    }
+
+    #[test]
+    fn local_updates_mirror_what_was_sent() {
+        let mut snap = fixture_snapshot();
+        let resolved = resolve(TargetKind::DefaultOutput, "", &snap);
+        let s = AudioSettings::default();
+        assert!(apply_locally(
+            &mut snap,
+            &resolved,
+            &s,
+            &Operation::AdjustVolume(10)
+        ));
+        let razer = snap.sinks.iter().find(|d| d.name == RAZER).unwrap();
+        assert_eq!((razer.volume, razer.muted), (57, false));
+        let resolved = resolve(TargetKind::App, "chrome", &snap);
+        assert!(apply_locally(
+            &mut snap,
+            &resolved,
+            &s,
+            &Operation::ToggleMute
+        ));
+        assert!(
+            snap.streams
+                .iter()
+                .filter(|x| x.binary == "chrome")
+                .all(|x| x.muted)
+        );
+        assert!(!apply_locally(
+            &mut snap,
+            &resolved,
+            &s,
+            &Operation::CycleDevice(1)
+        ));
     }
 
     #[tokio::test]

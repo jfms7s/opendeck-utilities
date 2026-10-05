@@ -1,16 +1,18 @@
 #!/usr/bin/env node
-// Assembles dist/<uuid>.sdPlugin/ from assets/ + a release binary for one target.
-// Usage: node build.mjs <target-triple>
-// Requires: cargo build --release --target <target-triple> already run for that triple.
+// Assembles dist/<uuid>.sdPlugin/ from assets/ and the release binaries.
+// Usage: node build.mjs [target-triple...]
+//   With triples: packages exactly those (each must be built).
+//   Without: packages every target in manifest.json's CodePaths that is built.
+// Build first: cargo build --release --locked --target <target-triple>
+// Binary names come from manifest.json's CodePaths, the single source of truth.
 import { cpSync, copyFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const UUID = "com.jfms7s.utilities";
 const BIN_NAME = "opendeck-utilities";
 
-const target = process.argv[2];
-if (!target) {
-	console.error("usage: node build.mjs <target-triple>");
+function fail(message) {
+	console.error(message);
 	process.exit(1);
 }
 
@@ -19,26 +21,29 @@ if (!target) {
 // whose crate version and Elgato-facing manifest version disagree.
 const cargoToml = readFileSync("Cargo.toml", "utf8");
 const cargoVersionMatch = cargoToml.match(/^version\s*=\s*"([^"]+)"/m);
-if (!cargoVersionMatch) {
-	console.error("could not find `version = \"...\"` in Cargo.toml");
-	process.exit(1);
-}
+if (!cargoVersionMatch) fail('could not find `version = "..."` in Cargo.toml');
 const cargoVersion = cargoVersionMatch[1];
 
 const manifest = JSON.parse(readFileSync("assets/manifest.json", "utf8"));
-const manifestVersion = manifest.Version;
-
-if (cargoVersion !== manifestVersion) {
-	console.error(
-		`version mismatch: Cargo.toml is ${cargoVersion} but assets/manifest.json is ${manifestVersion} - bump them together`,
+if (cargoVersion !== manifest.Version) {
+	fail(
+		`version mismatch: Cargo.toml is ${cargoVersion} but assets/manifest.json is ${manifest.Version} - bump them together`,
 	);
-	process.exit(1);
 }
 
-const binPath = join("target", target, "release", BIN_NAME);
-if (!existsSync(binPath)) {
-	console.error(`missing release binary: ${binPath} (run: cargo build --release --target ${target})`);
-	process.exit(1);
+const codePaths = manifest.CodePaths || {};
+const builtBinary = (target) => join("target", target, "release", BIN_NAME);
+
+const requested = process.argv.slice(2);
+for (const target of requested) {
+	if (!codePaths[target]) fail(`${target} is not in manifest.json's CodePaths`);
+	if (!existsSync(builtBinary(target))) {
+		fail(`missing release binary: ${builtBinary(target)} (run: cargo build --release --locked --target ${target})`);
+	}
+}
+const targets = requested.length > 0 ? requested : Object.keys(codePaths).filter((t) => existsSync(builtBinary(t)));
+if (targets.length === 0) {
+	fail(`no release binaries found; build one of: ${Object.keys(codePaths).join(", ")}`);
 }
 
 const outDir = join("dist", `${UUID}.sdPlugin`);
@@ -53,6 +58,10 @@ for (const dir of ["icons", "layouts", "propertyInspector"]) {
 		cpSync(join("assets", dir), join(outDir, dir), { recursive: true });
 	}
 }
-copyFileSync(binPath, join(outDir, `${BIN_NAME}-${target}`));
+for (const target of targets) {
+	copyFileSync(builtBinary(target), join(outDir, codePaths[target]));
+}
 
-console.log(`built ${outDir} for ${target}`);
+const missing = Object.keys(codePaths).filter((t) => !targets.includes(t));
+console.log(`built ${outDir} for ${targets.join(", ")}`);
+if (missing.length > 0) console.log(`note: no binary for ${missing.join(", ")} (fine for a local build)`);
