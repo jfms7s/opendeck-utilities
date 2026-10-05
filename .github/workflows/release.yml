@@ -40,7 +40,7 @@ jobs:
         with:
           node-version: 24
       - name: Property-inspector tests
-        run: node --test tests/
+        run: node --test tests/*.test.mjs
 
   build:
     needs: check

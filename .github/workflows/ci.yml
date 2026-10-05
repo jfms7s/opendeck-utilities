@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: 24
       - name: Property-inspector tests
-        run: node --test tests/
+        run: node --test tests/*.test.mjs
 
   msrv:
     runs-on: ubuntu-24.04
