@@ -155,6 +155,8 @@ fn pactl_command() -> Command {
 /// leave `pactl subscribe` running for days (performance review). The
 /// kernel sends the child SIGTERM when the thread that spawned it exits -
 /// here a long-lived runtime worker, so in practice when the plugin does.
+/// Linux-only (`PR_SET_PDEATHSIG`); macOS uses CoreAudio, not `pactl`.
+#[cfg(target_os = "linux")]
 fn die_with_parent(cmd: &mut Command) {
     // SAFETY: the hook runs in the forked child before exec and only makes
     // async-signal-safe calls.
@@ -163,8 +165,12 @@ fn die_with_parent(cmd: &mut Command) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn die_with_parent(_cmd: &mut Command) {}
+
 /// The `pre_exec` hook behind `die_with_parent`: prctl, getppid and _exit
 /// only, all async-signal-safe.
+#[cfg(target_os = "linux")]
 fn parent_death_hook() -> impl FnMut() -> std::io::Result<()> + Send + Sync + 'static {
     let parent = std::process::id();
     move || {
@@ -424,6 +430,7 @@ mod tests {
 
     /// The child must not outlive whoever spawned it: once the spawning
     /// thread exits, the kernel sends it SIGTERM.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_child_dies_with_the_thread_that_spawned_it() {
         use std::os::unix::process::{CommandExt, ExitStatusExt};

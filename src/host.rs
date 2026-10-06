@@ -278,12 +278,12 @@ mod tests {
     /// websocket (which stock OpenDeck drops) must not be used.
     #[tokio::test]
     async fn a_successful_command_does_not_touch_the_websocket() {
-        assert!(!used_websocket("/bin/true").await);
+        assert!(!used_websocket("/usr/bin/true").await);
     }
 
     #[tokio::test]
     async fn a_failing_or_missing_command_falls_back_to_the_websocket() {
-        assert!(used_websocket("/bin/false").await);
+        assert!(used_websocket("/usr/bin/false").await);
         assert!(used_websocket("/nonexistent/opendeck").await);
     }
 

@@ -161,6 +161,10 @@ pub fn spawn_watcher(state: OpenDeckState) -> watch::Receiver<u64> {
         let alive = Arc::new(AtomicBool::new(false));
         let watcher = match inotify::Inotify::new() {
             Ok(w) => Some(Arc::new(w)),
+            Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+                log::info!("polling OpenDeck's config every {FALLBACK_POLL:?} ({e})");
+                None
+            }
             Err(e) => {
                 log::warn!("inotify unavailable ({e}); polling OpenDeck's config instead");
                 None
@@ -215,6 +219,34 @@ fn watch_tree(w: &inotify::Inotify, dir: &Path) {
 }
 
 /// The few inotify calls the watcher needs, straight from libc.
+/// No inotify outside Linux: the watcher polls every `FALLBACK_POLL`.
+#[cfg(not(target_os = "linux"))]
+mod inotify {
+    use std::io;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use tokio::sync::Notify;
+
+    pub struct Inotify;
+
+    impl Inotify {
+        pub fn new() -> io::Result<Self> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "inotify is Linux-only",
+            ))
+        }
+
+        pub fn add(&self, _path: &Path) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn spawn_reader(_w: Arc<Inotify>, _wake: Arc<Notify>, _alive: Arc<AtomicBool>) {}
+}
+
+#[cfg(target_os = "linux")]
 mod inotify {
     use std::ffi::CString;
     use std::io;
@@ -391,6 +423,7 @@ mod tests {
         assert_ne!(before, s.fingerprint());
     }
 
+    #[cfg(target_os = "linux")]
     async fn ticks(rx: &mut watch::Receiver<u64>) -> bool {
         tokio::time::timeout(Duration::from_secs(5), rx.changed())
             .await
@@ -398,6 +431,7 @@ mod tests {
     }
 
     /// Well under the 30 s safety poll, so these only pass through inotify.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn the_watcher_ticks_on_writes_without_polling() {
         let (tmp, s) = fixture();
@@ -409,6 +443,7 @@ mod tests {
         assert!(ticks(&mut rx).await, "profile added");
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn the_watcher_follows_device_folders_created_later() {
         let (tmp, s) = fixture();
