@@ -8,6 +8,11 @@ use super::settings::AudioSettings;
 use super::target::Resolved;
 use crate::cycle::step_in;
 
+/// `max_volume`, but never above what the audio system accepts.
+fn effective_max(settings: &AudioSettings, cap: Option<u16>) -> u16 {
+    settings.max_volume().min(cap.unwrap_or(u16::MAX))
+}
+
 pub async fn execute(
     backend: &dyn AudioBackend,
     snap: &Snapshot,
@@ -40,7 +45,7 @@ async fn execute_on_device(
     settings: &AudioSettings,
     op: &Operation,
 ) -> Result<(), BackendError> {
-    let max = settings.max_volume();
+    let max = effective_max(settings, snap.volume_cap);
     match op {
         Operation::None => Ok(()),
         Operation::ToggleMute => backend.set_mute(node, Mute::Toggle).await,
@@ -83,7 +88,7 @@ async fn execute_on_app(
     let Some(first) = streams.first() else {
         return Err(BackendError::NoTarget);
     };
-    let max = settings.max_volume();
+    let max = effective_max(settings, snap.volume_cap);
     match op {
         Operation::None => Ok(()),
         // Streams are set to one explicit state rather than each toggled,
@@ -122,9 +127,10 @@ fn predicted(
     volume: u16,
     muted: bool,
     settings: &AudioSettings,
+    cap: Option<u16>,
     op: &Operation,
 ) -> Option<(u16, bool)> {
-    let max = settings.max_volume();
+    let max = effective_max(settings, cap);
     match op {
         Operation::None => Some((volume, muted)),
         Operation::ToggleMute => Some((volume, !muted)),
@@ -146,7 +152,9 @@ pub fn apply_locally(
 ) -> bool {
     match resolved {
         Resolved::Device { kind, device } => {
-            let Some((volume, muted)) = predicted(device.volume, device.muted, settings, op) else {
+            let Some((volume, muted)) =
+                predicted(device.volume, device.muted, settings, snap.volume_cap, op)
+            else {
                 return false;
             };
             let list = match kind {
@@ -163,7 +171,9 @@ pub fn apply_locally(
             let Some(first) = streams.first() else {
                 return true;
             };
-            let Some((volume, muted)) = predicted(first.volume, first.muted, settings, op) else {
+            let Some((volume, muted)) =
+                predicted(first.volume, first.muted, settings, snap.volume_cap, op)
+            else {
                 return false;
             };
             for s in snap
@@ -249,6 +259,38 @@ mod tests {
         .await;
         r.unwrap();
         assert_eq!(calls, vec![format!("volume Sink({RAZER:?}) 57")]);
+    }
+
+    /// CoreAudio has no boost: a +10 step from 95 % with max_volume 150
+    /// must send and predict 100, or the shown level drifts past the real
+    /// one and stays there.
+    #[tokio::test]
+    async fn the_platform_volume_cap_beats_max_volume() {
+        let mut snap = fixture_snapshot();
+        snap.volume_cap = Some(100);
+        for d in &mut snap.sinks {
+            d.volume = 95;
+        }
+        let settings = AudioSettings {
+            max_volume: 150,
+            ..AudioSettings::default()
+        };
+        let fake = FakeBackend::new(snap.clone());
+        let resolved = resolve(TargetKind::DefaultOutput, "", &snap);
+        let op = Operation::AdjustVolume(10);
+        execute(&fake, &snap, &resolved, &settings, &op)
+            .await
+            .unwrap();
+        assert_eq!(fake.calls(), vec![format!(r#"volume Sink("{RAZER}") 100"#)]);
+        assert!(apply_locally(&mut snap, &resolved, &settings, &op));
+        let razer = snap.sinks.iter().find(|d| d.name == RAZER).unwrap();
+        assert_eq!(razer.volume, 100);
+        let set = Operation::SetVolume(140);
+        assert!(apply_locally(&mut snap, &resolved, &settings, &set));
+        assert_eq!(
+            snap.sinks.iter().find(|d| d.name == RAZER).unwrap().volume,
+            100
+        );
     }
 
     #[tokio::test]

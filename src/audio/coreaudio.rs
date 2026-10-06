@@ -355,7 +355,24 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| BackendError::CoreAudio(format!("audio task failed: {e}")))?
 }
 
-pub struct CoreAudioBackend;
+/// `tick` is the change channel `subscribe` was given: every successful
+/// write bumps it so the action re-reads the real level (a device may round
+/// the volume to its own steps, so the plugin's prediction can be off).
+#[derive(Default)]
+pub struct CoreAudioBackend {
+    tick: std::sync::Mutex<Option<watch::Sender<u64>>>,
+}
+
+impl CoreAudioBackend {
+    fn written<T>(&self, result: Result<T, BackendError>) -> Result<T, BackendError> {
+        if result.is_ok()
+            && let Some(tx) = self.tick.lock().expect("tick lock").as_ref()
+        {
+            tx.send_modify(|n| *n = n.wrapping_add(1));
+        }
+        result
+    }
+}
 
 #[async_trait]
 impl AudioBackend for CoreAudioBackend {
@@ -365,17 +382,17 @@ impl AudioBackend for CoreAudioBackend {
 
     async fn set_volume(&self, node: &Node, percent: u16) -> Result<(), BackendError> {
         let node = node.clone();
-        blocking(move || set_volume_blocking(&node, percent)).await
+        self.written(blocking(move || set_volume_blocking(&node, percent)).await)
     }
 
     async fn set_mute(&self, node: &Node, mute: Mute) -> Result<(), BackendError> {
         let node = node.clone();
-        blocking(move || set_mute_blocking(&node, mute)).await
+        self.written(blocking(move || set_mute_blocking(&node, mute)).await)
     }
 
     async fn set_default(&self, kind: DeviceKind, name: &str) -> Result<(), BackendError> {
         let uid = name.to_string();
-        blocking(move || set_default_blocking(kind, &uid)).await
+        self.written(blocking(move || set_default_blocking(kind, &uid)).await)
     }
 
     async fn move_stream(&self, _stream: u32, _sink: &str) -> Result<(), BackendError> {
@@ -385,6 +402,7 @@ impl AudioBackend for CoreAudioBackend {
     /// Re-reads the HAL every `POLL` and bumps `tx` when anything changed;
     /// stops when every receiver is gone.
     fn subscribe(&self, tx: watch::Sender<u64>) {
+        *self.tick.lock().expect("tick lock") = Some(tx.clone());
         tokio::spawn(async move {
             let mut last: Option<Snapshot> = None;
             while !tx.is_closed() {
@@ -408,7 +426,7 @@ mod tests {
     /// the HAL must answer without crashing, whatever it reports.
     #[tokio::test]
     async fn coreaudio_snapshot_does_not_panic() {
-        match CoreAudioBackend.snapshot().await {
+        match CoreAudioBackend::default().snapshot().await {
             Ok(snap) => {
                 for d in snap.sinks.iter().chain(&snap.sources) {
                     assert!(!d.name.is_empty());
@@ -422,13 +440,13 @@ mod tests {
     #[tokio::test]
     async fn per_app_audio_is_unsupported() {
         assert!(matches!(
-            CoreAudioBackend
+            CoreAudioBackend::default()
                 .set_mute(&Node::SinkInput(1), Mute::On)
                 .await,
             Err(BackendError::Unsupported(_))
         ));
         assert!(matches!(
-            CoreAudioBackend.move_stream(1, "x").await,
+            CoreAudioBackend::default().move_stream(1, "x").await,
             Err(BackendError::Unsupported(_))
         ));
     }

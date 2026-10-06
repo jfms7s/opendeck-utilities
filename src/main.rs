@@ -30,7 +30,7 @@ use ui::{OpenDeckUi, Ui};
 /// CoreAudio on macOS, `pactl` (PipeWire/PulseAudio) elsewhere.
 fn audio_backend() -> Arc<dyn AudioBackend> {
     #[cfg(target_os = "macos")]
-    return Arc::new(audio::coreaudio::CoreAudioBackend);
+    return Arc::new(audio::coreaudio::CoreAudioBackend::default());
     #[cfg(not(target_os = "macos"))]
     return Arc::new(audio::backend::PactlBackend);
 }

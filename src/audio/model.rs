@@ -45,6 +45,9 @@ pub struct Snapshot {
     /// The audio system has no per-app streams (CoreAudio on macOS), so App
     /// targets can't work at all - not just "not playing" right now.
     pub apps_unsupported: bool,
+    /// The highest volume the audio system accepts (CoreAudio: 100, no
+    /// boost); `None` when `max_volume` alone decides (PipeWire allows 150).
+    pub volume_cap: Option<u16>,
 }
 
 impl Snapshot {
@@ -190,6 +193,7 @@ pub fn build_snapshot(
         sources,
         streams,
         apps_unsupported: false,
+        volume_cap: None,
     })
 }
 

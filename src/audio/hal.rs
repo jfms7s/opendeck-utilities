@@ -78,6 +78,7 @@ pub fn build_snapshot(
             .collect(),
         streams: Vec::new(),
         apps_unsupported: true,
+        volume_cap: Some(100),
     }
 }
 
@@ -147,6 +148,7 @@ mod tests {
         assert_eq!(snap.default_name(DeviceKind::Input), "mic");
         assert!(snap.streams.is_empty());
         assert!(snap.apps_unsupported);
+        assert_eq!(snap.volume_cap, Some(100));
         let headset_in = &snap.devices(DeviceKind::Input)[0];
         assert_eq!(
             (headset_in.index, headset_in.volume, headset_in.muted),
