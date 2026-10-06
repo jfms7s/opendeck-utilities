@@ -137,9 +137,19 @@
 				if (payload.event !== "audioChoices") return;
 				choices = payload;
 				controller = choices.controller || controller;
+				markAppSupport();
 				render();
 			},
 		});
+
+		// macOS has no per-app audio: keep the option (a saved App control
+		// still shows what it is) but disable it and say why.
+		function markAppSupport() {
+			const option = byId("target").querySelector('option[value="app"]');
+			const supported = choices.appsSupported !== false;
+			option.disabled = !supported;
+			option.textContent = supported ? "Application" : "Application (not supported on macOS)";
+		}
 
 		function gestureValue(slot) {
 			// The plugin's effective gestures win over this page's copy of the defaults.

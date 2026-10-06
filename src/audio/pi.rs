@@ -41,6 +41,7 @@ pub fn choices(
         "outputs": devices(&snap.sinks),
         "inputs": devices(&snap.sources),
         "apps": apps,
+        "appsSupported": super::APPS_SUPPORTED,
         "effective": { "press": e.press, "long_press": e.long_press, "touch_tap": e.touch_tap },
         "error": error,
     })
@@ -50,6 +51,17 @@ pub fn choices(
 mod tests {
     use super::*;
     use crate::audio::model::test_support::fixture_snapshot;
+
+    #[test]
+    fn says_whether_per_app_audio_exists_here() {
+        let c = choices(
+            &fixture_snapshot(),
+            &AudioSettings::default(),
+            Controller::Keypad,
+            None,
+        );
+        assert_eq!(c["appsSupported"], !cfg!(target_os = "macos"));
+    }
 
     #[test]
     fn apps_are_deduplicated_and_nameless_streams_skipped() {

@@ -1,3 +1,7 @@
+/// Per-app streams (PipeWire/PulseAudio sink-inputs); macOS has no public
+/// API for another process's audio.
+pub const APPS_SUPPORTED: bool = !cfg!(target_os = "macos");
+
 pub mod backend;
 #[cfg(target_os = "macos")]
 pub mod coreaudio;
