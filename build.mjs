@@ -32,6 +32,11 @@ if (cargoVersion !== manifest.Version) {
 }
 
 const codePaths = manifest.CodePaths || {};
+for (const key of ["CodePathLin", "CodePathMac"]) {
+	if (manifest[key] && !Object.values(codePaths).includes(manifest[key])) {
+		fail(`manifest.json ${key} "${manifest[key]}" is not one of its CodePaths`);
+	}
+}
 const builtBinary = (target) => join("target", target, "release", BIN_NAME);
 
 const requested = process.argv.slice(2);

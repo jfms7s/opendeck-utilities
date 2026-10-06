@@ -82,9 +82,11 @@ mod tests {
                 format!("{}-{triple}", env!("CARGO_PKG_NAME"))
             );
         }
-        assert!(
-            paths.values().any(|bin| *bin == manifest["CodePathLin"]),
-            "CodePathLin must be one of CodePaths"
-        );
+        for key in ["CodePathLin", "CodePathMac"] {
+            assert!(
+                paths.values().any(|bin| *bin == manifest[key]),
+                "{key} must be one of CodePaths"
+            );
+        }
     }
 }
