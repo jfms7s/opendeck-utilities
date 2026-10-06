@@ -1,7 +1,8 @@
 # CLAUDE.md
 
-OpenDeck plugin (`com.jfms7s.utilities`, Rust on the `openaction` crate) with three
-actions: Audio (`pactl`), Device Brightness and Switch Profile (`opendeck
+OpenDeck plugin (`com.jfms7s.utilities`, Rust on the `openaction` crate; Linux
+x86_64/aarch64 and Apple Silicon macOS) with three actions: Audio (`pactl` on Linux,
+CoreAudio on macOS), Device Brightness and Switch Profile (`opendeck
 --process-message`). Design docs, plans, reviews and issue write-ups live in the
 Obsidian vault at `~/git/obsidian-vault/personal/projects/opendeck-utilities/`, not
 in this repo.
@@ -13,6 +14,7 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 node --test tests/*.test.mjs       # property-inspector helpers
+cargo clippy --target aarch64-apple-darwin --all-targets --locked -- -D warnings  # macOS code, type-checked from Linux
 cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.mjs
 ```
 
@@ -20,7 +22,12 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
 
 - `src/audio/backend.rs` is the only code that runs `pactl`. Every device name
   goes through `is_safe_name`, and every `pactl` runs in the C locale
-  (`pactl_command`). Long-lived children get `die_with_parent`.
+  (`pactl_command`). Long-lived children get `die_with_parent` (Linux-only:
+  `PR_SET_PDEATHSIG`; a no-op elsewhere).
+- `src/audio/coreaudio.rs` (macOS only) is the only code that calls CoreAudio; pure
+  conversions live in `src/audio/hal.rs` so Linux tests cover them. macOS has no
+  per-app audio (`APPS_SUPPORTED`). Linux-only code is `cfg(target_os = "linux")`,
+  macOS-only code `cfg(target_os = "macos")`; keep both targets clippy-clean.
 - OpenDeck's config files are read, never written (`src/opendeck_state.rs`).
   Device ids are path components: check `is_safe_device_id` before joining.
 - Anything handed to another program is validated first: audio targets must exist
