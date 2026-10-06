@@ -41,7 +41,7 @@ pub fn choices(
         "outputs": devices(&snap.sinks),
         "inputs": devices(&snap.sources),
         "apps": apps,
-        "appsSupported": super::APPS_SUPPORTED,
+        "appsSupported": !snap.apps_unsupported,
         "effective": { "press": e.press, "long_press": e.long_press, "touch_tap": e.touch_tap },
         "error": error,
     })
@@ -54,13 +54,12 @@ mod tests {
 
     #[test]
     fn says_whether_per_app_audio_exists_here() {
-        let c = choices(
-            &fixture_snapshot(),
-            &AudioSettings::default(),
-            Controller::Keypad,
-            None,
-        );
-        assert_eq!(c["appsSupported"], !cfg!(target_os = "macos"));
+        let mut snap = fixture_snapshot();
+        let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
+        assert_eq!(c["appsSupported"], true);
+        snap.apps_unsupported = true;
+        let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
+        assert_eq!(c["appsSupported"], false);
     }
 
     #[test]

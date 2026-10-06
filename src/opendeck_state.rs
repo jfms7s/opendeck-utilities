@@ -33,10 +33,11 @@ const FALLBACK_POLL: Duration = Duration::from_secs(1);
 const SETTLE: Duration = Duration::from_millis(30);
 
 pub fn find_config_dir(home: &Path) -> Option<PathBuf> {
-    candidates(cfg!(target_os = "macos"))
-        .iter()
-        .map(|p| home.join(p))
-        .find(|p| p.is_dir())
+    find_config_dir_in(home, candidates(cfg!(target_os = "macos")))
+}
+
+fn find_config_dir_in(home: &Path, candidates: &[&str]) -> Option<PathBuf> {
+    candidates.iter().map(|p| home.join(p)).find(|p| p.is_dir())
 }
 
 /// Device ids come from settings (user-editable) and are joined into
@@ -507,13 +508,14 @@ mod tests {
     #[test]
     fn finds_native_then_flatpak_config() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(find_config_dir(tmp.path()), None);
+        let linux = candidates(false);
+        assert_eq!(find_config_dir_in(tmp.path(), linux), None);
         let flatpak = tmp.path().join(CANDIDATES_LINUX[1]);
         fs::create_dir_all(&flatpak).unwrap();
-        assert_eq!(find_config_dir(tmp.path()), Some(flatpak));
+        assert_eq!(find_config_dir_in(tmp.path(), linux), Some(flatpak));
         let native = tmp.path().join(CANDIDATES_LINUX[0]);
         fs::create_dir_all(&native).unwrap();
-        assert_eq!(find_config_dir(tmp.path()), Some(native));
+        assert_eq!(find_config_dir_in(tmp.path(), linux), Some(native));
     }
 
     #[test]

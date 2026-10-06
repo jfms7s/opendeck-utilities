@@ -42,6 +42,9 @@ pub struct Snapshot {
     /// Inputs only - monitor sources are excluded.
     pub sources: Vec<Device>,
     pub streams: Vec<Stream>,
+    /// The audio system has no per-app streams (CoreAudio on macOS), so App
+    /// targets can't work at all - not just "not playing" right now.
+    pub apps_unsupported: bool,
 }
 
 impl Snapshot {
@@ -186,6 +189,7 @@ pub fn build_snapshot(
         sinks: parse_devices(sinks)?,
         sources,
         streams,
+        apps_unsupported: false,
     })
 }
 

@@ -70,10 +70,6 @@ fn by_name(kind: DeviceKind, name: &str, snap: &Snapshot, fallback: &str) -> Res
 }
 
 pub fn resolve(kind: TargetKind, name: &str, snap: &Snapshot) -> Resolved {
-    resolve_on(super::APPS_SUPPORTED, kind, name, snap)
-}
-
-fn resolve_on(apps_supported: bool, kind: TargetKind, name: &str, snap: &Snapshot) -> Resolved {
     let name = name.trim();
     match kind {
         TargetKind::DefaultOutput => by_name(
@@ -93,7 +89,7 @@ fn resolve_on(apps_supported: bool, kind: TargetKind, name: &str, snap: &Snapsho
         },
         TargetKind::Output => by_name(DeviceKind::Output, name, snap, name),
         TargetKind::Input => by_name(DeviceKind::Input, name, snap, name),
-        TargetKind::App if !apps_supported => Resolved::Unavailable {
+        TargetKind::App if snap.apps_unsupported => Resolved::Unavailable {
             label: "not on macOS".to_string(),
         },
         TargetKind::App if name.is_empty() => Resolved::Unavailable {
@@ -123,17 +119,18 @@ mod tests {
 
     #[test]
     fn an_app_target_without_per_app_audio_is_unavailable() {
-        let snap = crate::audio::model::test_support::fixture_snapshot();
+        let mut snap = crate::audio::model::test_support::fixture_snapshot();
+        assert!(matches!(
+            resolve(TargetKind::App, "chrome", &snap),
+            Resolved::App { .. }
+        ));
+        snap.apps_unsupported = true;
         assert_eq!(
-            resolve_on(false, TargetKind::App, "chrome", &snap),
+            resolve(TargetKind::App, "chrome", &snap),
             Resolved::Unavailable {
                 label: "not on macOS".to_string()
             }
         );
-        assert!(matches!(
-            resolve_on(true, TargetKind::App, "chrome", &snap),
-            Resolved::App { .. }
-        ));
     }
     use crate::audio::model::test_support::fixture_snapshot;
 

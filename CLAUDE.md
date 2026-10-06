@@ -26,7 +26,7 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
   `PR_SET_PDEATHSIG`; a no-op elsewhere).
 - `src/audio/coreaudio.rs` (macOS only) is the only code that calls CoreAudio; pure
   conversions live in `src/audio/hal.rs` so Linux tests cover them. macOS has no
-  per-app audio (`APPS_SUPPORTED`). Linux-only code is `cfg(target_os = "linux")`,
+  per-app audio (`Snapshot::apps_unsupported`). Linux-only code is `cfg(target_os = "linux")`,
   macOS-only code `cfg(target_os = "macos")`; keep both targets clippy-clean.
 - OpenDeck's config files are read, never written (`src/opendeck_state.rs`).
   Device ids are path components: check `is_safe_device_id` before joining.
