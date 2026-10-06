@@ -2,6 +2,9 @@
 //! through a shell), and every name argument is checked by `is_safe_name`
 //! first: pactl parses options anywhere on its command line, so a
 //! free-text name like `--server=x` would otherwise be taken as an option.
+// macOS uses CoreAudio (`coreaudio.rs`); the pactl code still builds and
+// is tested there, but nothing calls it.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 
 use super::model::{self, DeviceKind, ParseError, Snapshot};
 use async_trait::async_trait;
@@ -45,6 +48,14 @@ pub enum BackendError {
     UnsafeName(String),
     #[error("io: {0}")]
     Io(std::io::Error),
+    /// The platform can't do this (macOS: per-app audio, a device without
+    /// a volume or mute control).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[error("{0}")]
+    Unsupported(String),
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[error("CoreAudio: {0}")]
+    CoreAudio(String),
 }
 
 /// The audio system: read it, change it, and hear about changes made
@@ -155,6 +166,8 @@ fn pactl_command() -> Command {
 /// leave `pactl subscribe` running for days (performance review). The
 /// kernel sends the child SIGTERM when the thread that spawned it exits -
 /// here a long-lived runtime worker, so in practice when the plugin does.
+/// Linux-only (`PR_SET_PDEATHSIG`); macOS uses CoreAudio, not `pactl`.
+#[cfg(target_os = "linux")]
 fn die_with_parent(cmd: &mut Command) {
     // SAFETY: the hook runs in the forked child before exec and only makes
     // async-signal-safe calls.
@@ -163,8 +176,12 @@ fn die_with_parent(cmd: &mut Command) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn die_with_parent(_cmd: &mut Command) {}
+
 /// The `pre_exec` hook behind `die_with_parent`: prctl, getppid and _exit
 /// only, all async-signal-safe.
+#[cfg(target_os = "linux")]
 fn parent_death_hook() -> impl FnMut() -> std::io::Result<()> + Send + Sync + 'static {
     let parent = std::process::id();
     move || {
@@ -424,6 +441,7 @@ mod tests {
 
     /// The child must not outlive whoever spawned it: once the spawning
     /// thread exits, the kernel sends it SIGTERM.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_child_dies_with_the_thread_that_spawned_it() {
         use std::os::unix::process::{CommandExt, ExitStatusExt};

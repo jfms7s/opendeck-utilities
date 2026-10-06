@@ -18,7 +18,7 @@ mod pi_pages;
 use actions::audio::AudioAction;
 use actions::brightness::BrightnessAction;
 use actions::profile::ProfileAction;
-use audio::backend::PactlBackend;
+use audio::backend::AudioBackend;
 use host::{Host, OpenDeckHost};
 use openaction::{OpenActionResult, register_action, run};
 use opendeck_state::OpenDeckState;
@@ -27,6 +27,14 @@ use ui::{OpenDeckUi, Ui};
 
 // Two workers are plenty for a handful of controls (performance review);
 // nothing here blocks a worker for long.
+/// CoreAudio on macOS, `pactl` (PipeWire/PulseAudio) elsewhere.
+fn audio_backend() -> Arc<dyn AudioBackend> {
+    #[cfg(target_os = "macos")]
+    return Arc::new(audio::coreaudio::CoreAudioBackend::default());
+    #[cfg(not(target_os = "macos"))]
+    return Arc::new(audio::backend::PactlBackend);
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> OpenActionResult<()> {
     simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())
@@ -39,7 +47,7 @@ async fn main() -> OpenActionResult<()> {
     let deck_state = OpenDeckState::discover();
     let deck_changes = opendeck_state::spawn_watcher(deck_state.clone());
 
-    register_action(AudioAction::start(Arc::new(PactlBackend), ui.clone())).await;
+    register_action(AudioAction::start(audio_backend(), ui.clone())).await;
     register_action(BrightnessAction::start(
         deck_state.clone(),
         deck_changes.clone(),
@@ -74,9 +82,11 @@ mod tests {
                 format!("{}-{triple}", env!("CARGO_PKG_NAME"))
             );
         }
-        assert!(
-            paths.values().any(|bin| *bin == manifest["CodePathLin"]),
-            "CodePathLin must be one of CodePaths"
-        );
+        for key in ["CodePathLin", "CodePathMac"] {
+            assert!(
+                paths.values().any(|bin| *bin == manifest[key]),
+                "{key} must be one of CodePaths"
+            );
+        }
     }
 }

@@ -55,9 +55,7 @@ pub struct OpenDeckHost;
 #[async_trait]
 impl Host for OpenDeckHost {
     async fn send(&self, event: Value) -> Result<(), String> {
-        let parent =
-            std::fs::read_link(format!("/proc/{}/exe", std::os::unix::process::parent_id())).ok();
-        let program = opendeck_program(parent);
+        let program = opendeck_program(parent_exe());
         LOGGED_PROGRAM.call_once(|| {
             log::info!("sending host events through {}", program.display());
         });
@@ -107,7 +105,39 @@ async fn process_message(program: &Path, event: &Value) -> Result<(), String> {
     }
 }
 
-/// OpenDeck starts the plugin, so its parent is normally the OpenDeck binary.
+/// The executable of the process that started the plugin (normally OpenDeck).
+#[cfg(target_os = "linux")]
+fn parent_exe() -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{}/exe", std::os::unix::process::parent_id())).ok()
+}
+
+/// macOS has no `/proc`; `proc_pidpath` gives the same answer.
+#[cfg(target_os = "macos")]
+fn parent_exe() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `buf` is valid for `buf.len()` bytes, which is what we pass.
+    let len = unsafe {
+        libc::proc_pidpath(
+            std::os::unix::process::parent_id() as libc::c_int,
+            buf.as_mut_ptr().cast(),
+            buf.len() as u32,
+        )
+    };
+    if len <= 0 {
+        return None;
+    }
+    buf.truncate(len as usize);
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buf)))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn parent_exe() -> Option<PathBuf> {
+    None
+}
+
+/// OpenDeck starts the plugin, so its parent is normally the OpenDeck binary
+/// (`opendeck` on Linux, `OpenDeck.app/Contents/MacOS/opendeck` on macOS).
 fn opendeck_program(parent_exe: Option<PathBuf>) -> PathBuf {
     parent_exe
         .filter(|p| {
@@ -278,12 +308,20 @@ mod tests {
     /// websocket (which stock OpenDeck drops) must not be used.
     #[tokio::test]
     async fn a_successful_command_does_not_touch_the_websocket() {
-        assert!(!used_websocket("/bin/true").await);
+        assert!(!used_websocket("/usr/bin/true").await);
+    }
+
+    /// The test runner has a parent (cargo) with a real executable: proves
+    /// the per-platform lookup (`/proc` on Linux, `proc_pidpath` on macOS).
+    #[test]
+    fn the_parent_executable_is_found() {
+        let exe = parent_exe().expect("parent executable");
+        assert!(exe.is_absolute() && exe.exists(), "{exe:?}");
     }
 
     #[tokio::test]
     async fn a_failing_or_missing_command_falls_back_to_the_websocket() {
-        assert!(used_websocket("/bin/false").await);
+        assert!(used_websocket("/usr/bin/false").await);
         assert!(used_websocket("/nonexistent/opendeck").await);
     }
 

@@ -20,6 +20,10 @@ simplelog = "0.12"
 base64 = "0.22"
 libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# CoreAudio (HAL) bindings for the macOS audio backend; pure Rust.
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware"] }
+
 [dev-dependencies]
 tokio = { version = "1.48", features = ["test-util", "macros", "rt"] }
 tempfile = "3"

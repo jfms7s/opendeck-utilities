@@ -16,12 +16,23 @@ customizable actions for keys and dials:
 
 ## Requirements
 
-- Linux with PipeWire (or PulseAudio) and `pactl` 16 or newer on `PATH`
+**Linux** (x86_64 or aarch64):
+
+- PipeWire (or PulseAudio) and `pactl` 16 or newer on `PATH`
   (the plugin reads `pactl -f json` output, added in version 16).
 - OpenDeck installed natively (config in `~/.config/opendeck`). Tested on
   OpenDeck 2.14.0 (native, Fedora). The Flatpak (config in
   `~/.var/app/me.amankhanna.opendeck/config/opendeck`) is supported in the code
   but untested; inside its sandbox `pactl` and `opendeck` may not be on `PATH`.
+
+**macOS** (Apple Silicon):
+
+- Nothing to install: audio goes through CoreAudio, and OpenDeck's config is read
+  from `~/Library/Application Support/opendeck`.
+- Not available on macOS: the **Application** audio target (macOS has no public
+  API for another app's volume or output device) and volumes above 100 %.
+- OpenDeck's config changes are picked up within about a second (polled; Linux
+  uses inotify).
 
 ## How brightness and profile switching work
 
@@ -31,7 +42,8 @@ plugin's websocket unless they come from its own Starter Pack plugin
 OpenDeck's command line instead, `opendeck --process-message <json>`, which
 hands the request to the running OpenDeck without that check (the flag
 exists since OpenDeck 2.6.0; tested on 2.14.0). It runs the OpenDeck binary
-that started the plugin, or `opendeck` on `PATH`, and logs which one once.
+that started the plugin (on macOS `OpenDeck.app/Contents/MacOS/opendeck`), or
+`opendeck` on `PATH`, and logs which one once.
 
 Each action re-reads OpenDeck's config files (never written) to confirm the
 change. If it doesn't land within 1.5 s, the control flashes an alert and
@@ -45,12 +57,23 @@ every press.
 Download the latest `.streamDeckPlugin` from
 [Releases](https://github.com/jfms7s/opendeck-utilities/releases). Then either
 double-click it (if your file manager associates the extension with OpenDeck) or unzip it
-into `~/.config/opendeck/plugins/` (Flatpak:
-`~/.var/app/me.amankhanna.opendeck/config/opendeck/plugins/`) and restart OpenDeck
-(OpenDeck only loads plugins at startup).
+into OpenDeck's plugins folder and restart OpenDeck (OpenDeck only loads plugins at
+startup):
+
+- Linux: `~/.config/opendeck/plugins/` (Flatpak:
+  `~/.var/app/me.amankhanna.opendeck/config/opendeck/plugins/`)
+- macOS: `~/Library/Application Support/opendeck/plugins/`
 
 Each release also has a `SHA256SUMS` file; check the download with
-`sha256sum -c SHA256SUMS` in the folder holding both files.
+`sha256sum -c SHA256SUMS` (macOS: `shasum -a 256 -c SHA256SUMS`) in the folder
+holding both files.
+
+On macOS, a bundle unzipped by hand (e.g. in Finder) is marked as downloaded and
+Gatekeeper refuses to start the binary. Clear the mark once:
+
+```bash
+xattr -dr com.apple.quarantine ~/Library/Application\ Support/opendeck/plugins/com.jfms7s.utilities.sdPlugin
+```
 
 ## Manual smoke-test checklist
 
@@ -118,6 +141,20 @@ at least two output devices) before cutting a release:
       in the order they were ticked.
 - [ ] Switching profile from OpenDeck's own UI updates every Switch Profile control.
 
+On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
+
+- [ ] `xattr -l` on the installed `opendeck-utilities-aarch64-apple-darwin` shows no
+      `com.apple.quarantine`.
+- [ ] A dial on the default output changes volume and mutes on press; the level
+      follows changes made in Control Center within about a second.
+- [ ] Switching to the next output device moves the system output (Sound settings
+      shows it); a specific-device control picks its device from the list.
+- [ ] The default input mutes and unmutes; push-to-talk unmutes only while held.
+- [ ] An output without a volume control (e.g. HDMI) shows 100 % and a press alerts
+      instead of crashing.
+- [ ] The Audio settings page shows "Application (not supported on macOS)" disabled.
+- [ ] Device Brightness and Switch Profile change OpenDeck and confirm without an alert.
+
 Last verified: not recorded yet. At each release, replace this line with the date,
 the OpenDeck, `pactl` and PipeWire versions and the device the checklist passed on.
 
@@ -126,8 +163,9 @@ the OpenDeck, `pactl` and PipeWire versions and the device the checklist passed 
 ```bash
 cargo test --locked                          # unit tests (no live audio or OpenDeck needed)
 node --test tests/*.test.mjs                 # property-inspector helpers (pi.js)
-cargo build --release --locked --target x86_64-unknown-linux-gnu
+cargo build --release --locked --target x86_64-unknown-linux-gnu   # macOS: aarch64-apple-darwin
 node build.mjs                               # packages every built target into dist/<uuid>.sdPlugin
+cargo clippy --target aarch64-apple-darwin --all-targets   # type-checks the macOS code from Linux (rustup target add aarch64-apple-darwin)
 ```
 
 To try a build, **quit OpenDeck first**: copying over the binary of a running
@@ -141,9 +179,11 @@ rsync -a --delete dist/com.jfms7s.utilities.sdPlugin/ \
 ```
 
 For the Flatpak, the plugins folder is
-`~/.var/app/me.amankhanna.opendeck/config/opendeck/plugins/`.
+`~/.var/app/me.amankhanna.opendeck/config/opendeck/plugins/`; on macOS it is
+`~/Library/Application Support/opendeck/plugins/`.
 
-The plugin log (`~/.local/share/opendeck/logs/plugins/`) starts with the plugin's
+The plugin log (`~/.local/share/opendeck/logs/plugins/`; macOS
+`~/Library/Logs/opendeck/plugins/`) starts with the plugin's
 version, so you can confirm which build the checklist ran against.
 
 Icon sources (SVG) live in `assets/icon-src/`; only the PNGs in `assets/icons/` are
@@ -154,10 +194,11 @@ shipped in the plugin bundle.
 1. Bump `version` in `Cargo.toml` and `Version` in `assets/manifest.json` together
    (a test and `build.mjs` both fail if they differ), and merge that.
 2. Push a `vX.Y.Z` tag matching that version. The release workflow re-runs the
-   checks, builds both architectures and creates a **draft** release with the bundle
+   checks, builds both Linux architectures and the macOS one (on a macOS runner) and
+   creates a **draft** release with the bundle
    and `SHA256SUMS`.
-3. Install the draft's bundle, run the smoke-test checklist, update the "Last
-   verified" line above, then publish the draft.
+3. Install the draft's bundle on Linux and on a Mac, run the smoke-test checklist,
+   update the "Last verified" line above, then publish the draft.
 
 ## License
 

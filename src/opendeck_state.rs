@@ -9,10 +9,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Notify, watch};
 
-const CANDIDATES: [&str; 2] = [
+/// Where OpenDeck keeps its config, relative to `$HOME`, in search order.
+const CANDIDATES_LINUX: [&str; 2] = [
     ".config/opendeck",
     ".var/app/me.amankhanna.opendeck/config/opendeck",
 ];
+/// Tauri's app config dir for the identifier `opendeck`.
+const CANDIDATES_MACOS: [&str; 1] = ["Library/Application Support/opendeck"];
+
+fn candidates(macos: bool) -> &'static [&'static str] {
+    if macos {
+        &CANDIDATES_MACOS
+    } else {
+        &CANDIDATES_LINUX
+    }
+}
 /// With inotify the watcher only wakes when OpenDeck writes; this slow
 /// re-check is a safety net for missed events.
 const SAFETY_POLL: Duration = Duration::from_secs(30);
@@ -22,7 +33,11 @@ const FALLBACK_POLL: Duration = Duration::from_secs(1);
 const SETTLE: Duration = Duration::from_millis(30);
 
 pub fn find_config_dir(home: &Path) -> Option<PathBuf> {
-    CANDIDATES.iter().map(|p| home.join(p)).find(|p| p.is_dir())
+    find_config_dir_in(home, candidates(cfg!(target_os = "macos")))
+}
+
+fn find_config_dir_in(home: &Path, candidates: &[&str]) -> Option<PathBuf> {
+    candidates.iter().map(|p| home.join(p)).find(|p| p.is_dir())
 }
 
 /// Device ids come from settings (user-editable) and are joined into
@@ -40,8 +55,13 @@ fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-const NO_CONFIG_DIR: &str =
-    "OpenDeck config directory not found (~/.config/opendeck or the Flatpak path)";
+fn no_config_dir(macos: bool) -> &'static str {
+    if macos {
+        "OpenDeck config directory not found (~/Library/Application Support/opendeck)"
+    } else {
+        "OpenDeck config directory not found (~/.config/opendeck or the Flatpak path)"
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct OpenDeckState {
@@ -69,7 +89,7 @@ impl OpenDeckState {
                 "can't read OpenDeck's brightness from {}",
                 dir.join("settings.json").display()
             ),
-            None => NO_CONFIG_DIR.to_string(),
+            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
         }
     }
 
@@ -82,7 +102,7 @@ impl OpenDeckState {
                     .join(format!("{device}.json"))
                     .display()
             ),
-            None => NO_CONFIG_DIR.to_string(),
+            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
         }
     }
 
@@ -161,6 +181,10 @@ pub fn spawn_watcher(state: OpenDeckState) -> watch::Receiver<u64> {
         let alive = Arc::new(AtomicBool::new(false));
         let watcher = match inotify::Inotify::new() {
             Ok(w) => Some(Arc::new(w)),
+            Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+                log::info!("polling OpenDeck's config every {FALLBACK_POLL:?} ({e})");
+                None
+            }
             Err(e) => {
                 log::warn!("inotify unavailable ({e}); polling OpenDeck's config instead");
                 None
@@ -215,6 +239,34 @@ fn watch_tree(w: &inotify::Inotify, dir: &Path) {
 }
 
 /// The few inotify calls the watcher needs, straight from libc.
+/// No inotify outside Linux: the watcher polls every `FALLBACK_POLL`.
+#[cfg(not(target_os = "linux"))]
+mod inotify {
+    use std::io;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use tokio::sync::Notify;
+
+    pub struct Inotify;
+
+    impl Inotify {
+        pub fn new() -> io::Result<Self> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "inotify is Linux-only",
+            ))
+        }
+
+        pub fn add(&self, _path: &Path) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn spawn_reader(_w: Arc<Inotify>, _wake: Arc<Notify>, _alive: Arc<AtomicBool>) {}
+}
+
+#[cfg(target_os = "linux")]
 mod inotify {
     use std::ffi::CString;
     use std::io;
@@ -391,6 +443,7 @@ mod tests {
         assert_ne!(before, s.fingerprint());
     }
 
+    #[cfg(target_os = "linux")]
     async fn ticks(rx: &mut watch::Receiver<u64>) -> bool {
         tokio::time::timeout(Duration::from_secs(5), rx.changed())
             .await
@@ -398,6 +451,7 @@ mod tests {
     }
 
     /// Well under the 30 s safety poll, so these only pass through inotify.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn the_watcher_ticks_on_writes_without_polling() {
         let (tmp, s) = fixture();
@@ -409,6 +463,7 @@ mod tests {
         assert!(ticks(&mut rx).await, "profile added");
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn the_watcher_follows_device_folders_created_later() {
         let (tmp, s) = fixture();
@@ -453,12 +508,21 @@ mod tests {
     #[test]
     fn finds_native_then_flatpak_config() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(find_config_dir(tmp.path()), None);
-        let flatpak = tmp.path().join(CANDIDATES[1]);
+        let linux = candidates(false);
+        assert_eq!(find_config_dir_in(tmp.path(), linux), None);
+        let flatpak = tmp.path().join(CANDIDATES_LINUX[1]);
         fs::create_dir_all(&flatpak).unwrap();
-        assert_eq!(find_config_dir(tmp.path()), Some(flatpak));
-        let native = tmp.path().join(CANDIDATES[0]);
+        assert_eq!(find_config_dir_in(tmp.path(), linux), Some(flatpak));
+        let native = tmp.path().join(CANDIDATES_LINUX[0]);
         fs::create_dir_all(&native).unwrap();
-        assert_eq!(find_config_dir(tmp.path()), Some(native));
+        assert_eq!(find_config_dir_in(tmp.path(), linux), Some(native));
+    }
+
+    #[test]
+    fn macos_looks_in_application_support() {
+        assert_eq!(candidates(true), ["Library/Application Support/opendeck"]);
+        assert_eq!(candidates(false), CANDIDATES_LINUX);
+        assert!(no_config_dir(true).contains("~/Library/Application Support/opendeck"));
+        assert!(no_config_dir(false).contains("~/.config/opendeck"));
     }
 }
