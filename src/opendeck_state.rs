@@ -9,10 +9,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Notify, watch};
 
-const CANDIDATES: [&str; 2] = [
+/// Where OpenDeck keeps its config, relative to `$HOME`, in search order.
+const CANDIDATES_LINUX: [&str; 2] = [
     ".config/opendeck",
     ".var/app/me.amankhanna.opendeck/config/opendeck",
 ];
+/// Tauri's app config dir for the identifier `opendeck`.
+const CANDIDATES_MACOS: [&str; 1] = ["Library/Application Support/opendeck"];
+
+fn candidates(macos: bool) -> &'static [&'static str] {
+    if macos {
+        &CANDIDATES_MACOS
+    } else {
+        &CANDIDATES_LINUX
+    }
+}
 /// With inotify the watcher only wakes when OpenDeck writes; this slow
 /// re-check is a safety net for missed events.
 const SAFETY_POLL: Duration = Duration::from_secs(30);
@@ -22,7 +33,10 @@ const FALLBACK_POLL: Duration = Duration::from_secs(1);
 const SETTLE: Duration = Duration::from_millis(30);
 
 pub fn find_config_dir(home: &Path) -> Option<PathBuf> {
-    CANDIDATES.iter().map(|p| home.join(p)).find(|p| p.is_dir())
+    candidates(cfg!(target_os = "macos"))
+        .iter()
+        .map(|p| home.join(p))
+        .find(|p| p.is_dir())
 }
 
 /// Device ids come from settings (user-editable) and are joined into
@@ -40,8 +54,13 @@ fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-const NO_CONFIG_DIR: &str =
-    "OpenDeck config directory not found (~/.config/opendeck or the Flatpak path)";
+fn no_config_dir(macos: bool) -> &'static str {
+    if macos {
+        "OpenDeck config directory not found (~/Library/Application Support/opendeck)"
+    } else {
+        "OpenDeck config directory not found (~/.config/opendeck or the Flatpak path)"
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct OpenDeckState {
@@ -69,7 +88,7 @@ impl OpenDeckState {
                 "can't read OpenDeck's brightness from {}",
                 dir.join("settings.json").display()
             ),
-            None => NO_CONFIG_DIR.to_string(),
+            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
         }
     }
 
@@ -82,7 +101,7 @@ impl OpenDeckState {
                     .join(format!("{device}.json"))
                     .display()
             ),
-            None => NO_CONFIG_DIR.to_string(),
+            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
         }
     }
 
@@ -489,11 +508,19 @@ mod tests {
     fn finds_native_then_flatpak_config() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(find_config_dir(tmp.path()), None);
-        let flatpak = tmp.path().join(CANDIDATES[1]);
+        let flatpak = tmp.path().join(CANDIDATES_LINUX[1]);
         fs::create_dir_all(&flatpak).unwrap();
         assert_eq!(find_config_dir(tmp.path()), Some(flatpak));
-        let native = tmp.path().join(CANDIDATES[0]);
+        let native = tmp.path().join(CANDIDATES_LINUX[0]);
         fs::create_dir_all(&native).unwrap();
         assert_eq!(find_config_dir(tmp.path()), Some(native));
+    }
+
+    #[test]
+    fn macos_looks_in_application_support() {
+        assert_eq!(candidates(true), ["Library/Application Support/opendeck"]);
+        assert_eq!(candidates(false), CANDIDATES_LINUX);
+        assert!(no_config_dir(true).contains("~/Library/Application Support/opendeck"));
+        assert!(no_config_dir(false).contains("~/.config/opendeck"));
     }
 }
