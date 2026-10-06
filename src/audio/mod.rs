@@ -1,4 +1,6 @@
 pub mod backend;
+#[cfg(target_os = "macos")]
+pub mod coreaudio;
 pub mod exec;
 #[cfg(test)]
 pub mod fake;
