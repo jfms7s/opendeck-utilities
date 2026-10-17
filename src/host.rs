@@ -19,6 +19,11 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 pub const CONFIRM_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Bound on one `opendeck --process-message` launch, which normally exits in
+/// milliseconds. A launch that hangs is killed and treated as a failure, so
+/// the dispatcher's slot moves on (and the instance alerts) instead of
+/// stalling every later request for that key.
+const HOST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Safety net while waiting for a confirmation: the state watcher normally
 /// wakes the wait as soon as OpenDeck writes its files.
 const CONFIRM_RECHECK: Duration = Duration::from_millis(500);
@@ -89,14 +94,21 @@ where
 }
 
 async fn process_message(program: &Path, event: &Value) -> Result<(), String> {
-    let status = tokio::process::Command::new(program)
-        .args(process_message_args(event))
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(process_message_args(event))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .status()
+        .stderr(Stdio::null());
+    run_bounded(cmd, HOST_TIMEOUT).await
+}
+
+/// Runs `cmd` to completion, killing it if it hasn't exited within `limit`.
+/// Exiting non-zero, failing to spawn and timing out are all errors.
+async fn run_bounded(mut cmd: tokio::process::Command, limit: Duration) -> Result<(), String> {
+    // Dropping the `status()` future on timeout kills the child.
+    let status = tokio::time::timeout(limit, cmd.kill_on_drop(true).status())
         .await
+        .map_err(|_| format!("timed out after {limit:?}"))?
         .map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
@@ -323,6 +335,21 @@ mod tests {
     async fn a_failing_or_missing_command_falls_back_to_the_websocket() {
         assert!(used_websocket("/usr/bin/false").await);
         assert!(used_websocket("/nonexistent/opendeck").await);
+    }
+
+    /// A launch that never exits (OpenDeck's listener busy, the binary
+    /// replaced mid-upgrade) is killed at the bound and reported as an
+    /// error, so the dispatcher's slot moves on. Real time: a real child.
+    #[tokio::test]
+    async fn a_hung_command_is_cut_off_and_reported_as_an_error() {
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("30");
+        let start = std::time::Instant::now();
+        let result = run_bounded(cmd, Duration::from_millis(200)).await;
+        let elapsed = start.elapsed();
+        let err = result.expect_err("a hung child must fail");
+        assert!(err.contains("timed out"), "{err}");
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
     }
 
     #[tokio::test(start_paused = true)]
