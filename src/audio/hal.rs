@@ -3,6 +3,73 @@
 //! `coreaudio.rs` (macOS) reads the real HAL.
 
 use super::model::{Device, Snapshot};
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+/// Without property listeners, `subscribe` re-reads the HAL this often to
+/// notice outside changes.
+pub const POLL: Duration = Duration::from_millis(500);
+/// With listeners, changes arrive as callbacks; this slow re-read is only a
+/// safety net for a missed one.
+pub const SAFETY_POLL: Duration = Duration::from_secs(10);
+
+/// `kAudioHardwarePropertyDevices` (`'dev#'`): the system object's device
+/// list. Its own copy so the decision below is tested on every platform.
+pub const DEVICES_SELECTOR: u32 = u32::from_be_bytes(*b"dev#");
+
+/// Whether a listener batch reports a changed device list, in which case
+/// devices that appeared need listeners of their own.
+pub fn device_list_changed(selectors: impl IntoIterator<Item = u32>) -> bool {
+    selectors.into_iter().any(|s| s == DEVICES_SELECTOR)
+}
+
+/// The devices that already have listeners (by `AudioObjectID`).
+#[derive(Debug, Default)]
+pub struct Listened {
+    ids: BTreeSet<u32>,
+}
+
+impl Listened {
+    /// The ids in `current` that still need listeners, which are recorded
+    /// as listened from now on. Ids no longer present are forgotten: a
+    /// removed device's listeners go with it, so if it comes back under the
+    /// same id it is registered again.
+    pub fn new_devices(&mut self, current: &[u32]) -> Vec<u32> {
+        self.ids.retain(|id| current.contains(id));
+        current
+            .iter()
+            .copied()
+            .filter(|&id| self.ids.insert(id))
+            .collect()
+    }
+
+    /// Forgets `id` (its registration failed), so the next sync retries it.
+    pub fn forget(&mut self, id: u32) {
+        self.ids.remove(&id);
+    }
+}
+
+/// Whether the listeners are trustworthy, and so how often to re-read.
+#[derive(Debug, Default)]
+pub struct ListenHealth {
+    ok: bool,
+    warned: bool,
+}
+
+impl ListenHealth {
+    /// Records the latest registration outcome. True exactly once, on the
+    /// first failure: the caller logs then and not on every retry.
+    pub fn report(&mut self, ok: bool) -> bool {
+        self.ok = ok;
+        let first_failure = !ok && !self.warned;
+        self.warned |= !ok;
+        first_failure
+    }
+
+    pub fn poll_interval(&self) -> Duration {
+        if self.ok { SAFETY_POLL } else { POLL }
+    }
+}
 
 /// A device's volume and mute in one direction (output or input). `None`
 /// where the device has no such control (common on HDMI outputs).
@@ -168,6 +235,49 @@ mod tests {
         let hdmi = &snap.devices(DeviceKind::Output)[0];
         assert_eq!((hdmi.volume, hdmi.muted), (100, false));
         assert_eq!(snap.default_name(DeviceKind::Input), "");
+    }
+
+    #[test]
+    fn only_the_device_list_asks_for_new_listeners() {
+        assert_eq!(DEVICES_SELECTOR, 0x6465_7623);
+        let volume = u32::from_be_bytes(*b"volm");
+        let mute = u32::from_be_bytes(*b"mute");
+        let default_output = u32::from_be_bytes(*b"dOut");
+        assert!(!device_list_changed([volume, mute, default_output]));
+        assert!(!device_list_changed([]));
+        assert!(device_list_changed([volume, DEVICES_SELECTOR]));
+    }
+
+    #[test]
+    fn new_devices_get_listeners_once() {
+        let mut l = Listened::default();
+        assert_eq!(l.new_devices(&[10, 11]), [10, 11]);
+        assert!(l.new_devices(&[10, 11]).is_empty());
+        // A device plugged in: only it needs listeners.
+        assert_eq!(l.new_devices(&[10, 11, 12]), [12]);
+        // 11 unplugged, then back under the same id: registered again.
+        assert!(l.new_devices(&[10, 12]).is_empty());
+        assert_eq!(l.new_devices(&[10, 11, 12]), [11]);
+        // A failed registration is retried on the next sync.
+        l.forget(12);
+        assert_eq!(l.new_devices(&[10, 11, 12]), [12]);
+    }
+
+    #[test]
+    fn listeners_poll_slowly_and_failures_fall_back_logging_once() {
+        let mut h = ListenHealth::default();
+        // Before the first registration nothing is trusted yet.
+        assert_eq!(h.poll_interval(), POLL);
+        assert!(!h.report(true));
+        assert_eq!(h.poll_interval(), SAFETY_POLL);
+        assert!(SAFETY_POLL >= Duration::from_secs(10));
+        assert!(h.report(false), "the first failure is logged");
+        assert_eq!(h.poll_interval(), POLL);
+        assert!(!h.report(false), "and only the first");
+        assert!(!h.report(true));
+        assert_eq!(h.poll_interval(), SAFETY_POLL);
+        assert!(!h.report(false));
+        assert_eq!(POLL, Duration::from_millis(500));
     }
 
     #[test]
