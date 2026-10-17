@@ -208,8 +208,12 @@ pub fn spawn_watcher(state: OpenDeckState) -> watch::Receiver<u64> {
         };
         if let Some(w) = &watcher {
             watch_tree(w, &dir);
+            // Set before the thread starts, so its own `false` on error wins.
             alive.store(true, Ordering::SeqCst);
-            fswatch::spawn_reader(w.clone(), wake.clone(), alive.clone());
+            if !fswatch::spawn_reader(w.clone(), wake.clone(), alive.clone()) {
+                // No reader thread, no events: poll at FALLBACK_POLL.
+                alive.store(false, Ordering::SeqCst);
+            }
         }
         let mut last = state.fingerprint();
         loop {
@@ -361,7 +365,9 @@ mod fswatch {
         pub fn retain(&self, _wanted: &[PathBuf]) {}
     }
 
-    pub fn spawn_reader(_w: Arc<Watcher>, _wake: Arc<Notify>, _alive: Arc<AtomicBool>) {}
+    pub fn spawn_reader(_w: Arc<Watcher>, _wake: Arc<Notify>, _alive: Arc<AtomicBool>) -> bool {
+        false
+    }
 }
 
 /// The few inotify calls the watcher needs, straight from libc.
@@ -443,7 +449,8 @@ mod fswatch {
     }
 
     /// A thread blocked in `read`: zero wakeups while nothing changes.
-    pub fn spawn_reader(w: Arc<Watcher>, wake: Arc<Notify>, alive: Arc<AtomicBool>) {
+    /// False if the thread couldn't start.
+    pub fn spawn_reader(w: Arc<Watcher>, wake: Arc<Notify>, alive: Arc<AtomicBool>) -> bool {
         let spawned = std::thread::Builder::new()
             .name("opendeck-inotify".into())
             .spawn(move || {
@@ -454,8 +461,12 @@ mod fswatch {
                 alive.store(false, Ordering::SeqCst);
                 wake.notify_one();
             });
-        if let Err(e) = spawned {
-            log::warn!("can't start the inotify thread ({e}); polling instead");
+        match spawned {
+            Ok(_) => true,
+            Err(e) => {
+                log::warn!("can't start the inotify thread ({e}); polling instead");
+                false
+            }
         }
     }
 }
@@ -591,7 +602,8 @@ mod fswatch {
     }
 
     /// A thread blocked in `kevent`: zero wakeups while nothing changes.
-    pub fn spawn_reader(w: Arc<Watcher>, wake: Arc<Notify>, alive: Arc<AtomicBool>) {
+    /// False if the thread couldn't start.
+    pub fn spawn_reader(w: Arc<Watcher>, wake: Arc<Notify>, alive: Arc<AtomicBool>) -> bool {
         let spawned = std::thread::Builder::new()
             .name("opendeck-kqueue".into())
             .spawn(move || {
@@ -602,8 +614,12 @@ mod fswatch {
                 alive.store(false, Ordering::SeqCst);
                 wake.notify_one();
             });
-        if let Err(e) = spawned {
-            log::warn!("can't start the kqueue thread ({e}); polling instead");
+        match spawned {
+            Ok(_) => true,
+            Err(e) => {
+                log::warn!("can't start the kqueue thread ({e}); polling instead");
+                false
+            }
         }
     }
 }
