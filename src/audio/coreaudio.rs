@@ -7,9 +7,10 @@ use super::backend::{AudioBackend, BackendError, Mute, Node};
 use super::hal::{self, Controls, HalDevice};
 use super::model::{DeviceKind, Snapshot};
 use async_trait::async_trait;
+use hal::POLL;
 use objc2_core_audio::{
-    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectHasProperty,
-    AudioObjectID, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
+    AudioObjectAddPropertyListener, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
+    AudioObjectHasProperty, AudioObjectID, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
     kAudioDevicePropertyDeviceUID, kAudioDevicePropertyMute,
     kAudioDevicePropertyStreamConfiguration, kAudioDevicePropertyVolumeScalar,
     kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice,
@@ -19,11 +20,11 @@ use objc2_core_audio::{
 };
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
-/// How often `subscribe` re-reads the HAL to notice outside changes.
-const POLL: Duration = Duration::from_millis(500);
 const SYSTEM: AudioObjectID = kAudioObjectSystemObject as AudioObjectID;
 const MAIN: u32 = kAudioObjectPropertyElementMain;
 const PER_APP: &str = "per-app audio isn't available on macOS";
@@ -38,6 +39,9 @@ unsafe extern "C" {
     fn CFRelease(cf: *const c_void);
 }
 const CF_UTF8: u32 = 0x0800_0100;
+/// `kAudioHardwarePropertyRunLoop` (`'rnlp'`, in objc2-core-audio's
+/// `AudioHardwareDeprecated` feature, which this one constant isn't worth).
+const RUN_LOOP: u32 = 0x726e_6c70;
 
 fn address(selector: u32, scope: u32, element: u32) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress {
@@ -220,7 +224,7 @@ fn controls(id: AudioObjectID, scope: u32, channel_count: u32) -> Controls {
     }
 }
 
-fn read_devices() -> Result<Vec<HalDevice>, BackendError> {
+fn device_ids() -> Result<Vec<AudioObjectID>, BackendError> {
     let (words, len) = get_words(
         SYSTEM,
         address(
@@ -230,8 +234,12 @@ fn read_devices() -> Result<Vec<HalDevice>, BackendError> {
         ),
     )?;
     let b = bytes(&words, len);
-    let ids = (0..len / 4).filter_map(|i| u32_at(b, i * 4));
-    Ok(ids
+    Ok((0..len / 4).filter_map(|i| u32_at(b, i * 4)).collect())
+}
+
+fn read_devices() -> Result<Vec<HalDevice>, BackendError> {
+    Ok(device_ids()?
+        .into_iter()
         .map(|id| {
             let outs = channels(id, kAudioObjectPropertyScopeOutput);
             let ins = channels(id, kAudioObjectPropertyScopeInput);
@@ -355,20 +363,216 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| BackendError::CoreAudio(format!("audio task failed: {e}")))?
 }
 
+/// After a safety re-read finds a change with no callback, how long to
+/// wait for one still in flight before calling the listeners silent.
+const GRACE: Duration = Duration::from_millis(250);
+
+/// What a property listener needs, leaked once per `subscribe` (the
+/// plugin's lifetime) so the HAL can hold a plain pointer to it.
+struct Listener {
+    /// The `subscribe` channel: every callback bumps it.
+    tx: watch::Sender<u64>,
+    /// Wakes `subscribe`'s loop for a listener sync pass (the callback
+    /// itself makes no HAL calls).
+    resync: Notify,
+    /// Callbacks received, for the liveness check.
+    heard: AtomicU64,
+    /// Writes this process made: a change seen alongside one isn't counted
+    /// as missed even if its callback is late.
+    writes: AtomicU64,
+    /// Devices whose channels changed, queued by the callback. A separate
+    /// lock from `listened`, which the loop holds around HAL calls'
+    /// bookkeeping, so the callback never waits on a sync pass.
+    recheck: Mutex<Vec<AudioObjectID>>,
+    listened: Mutex<hal::Listened>,
+}
+
+impl Listener {
+    fn leak(tx: watch::Sender<u64>) -> &'static Self {
+        Box::leak(Box::new(Self {
+            tx,
+            resync: Notify::new(),
+            heard: AtomicU64::new(0),
+            writes: AtomicU64::new(0),
+            recheck: Mutex::new(Vec::new()),
+            listened: Mutex::new(hal::Listened::default()),
+        }))
+    }
+
+    /// `(callbacks, writes)` so far.
+    fn counts(&self) -> (u64, u64) {
+        (
+            self.heard.load(Ordering::SeqCst),
+            self.writes.load(Ordering::SeqCst),
+        )
+    }
+}
+
+/// Called by the HAL on its own thread with the addresses that changed.
+unsafe extern "C-unwind" fn on_change(
+    id: AudioObjectID,
+    count: u32,
+    addresses: NonNull<AudioObjectPropertyAddress>,
+    client: *mut c_void,
+) -> i32 {
+    // SAFETY: `client` is the `&'static Listener` passed at registration
+    // (leaked, never freed), and the HAL passes `count` valid addresses
+    // that live for the duration of the call.
+    let (listener, changed) = unsafe {
+        (
+            &*client.cast::<Listener>(),
+            std::slice::from_raw_parts(addresses.as_ptr(), count as usize),
+        )
+    };
+    listener.heard.fetch_add(1, Ordering::SeqCst);
+    listener.tx.send_modify(|n| *n = n.wrapping_add(1));
+    let wake = hal::route(id, changed.iter().map(|a| a.mSelector));
+    if let Some(device) = wake.recheck
+        && let Ok(mut queue) = listener.recheck.lock()
+    {
+        queue.push(device);
+    }
+    if wake.resync {
+        listener.resync.notify_one();
+    }
+    0
+}
+
+fn listen(
+    id: AudioObjectID,
+    addr: AudioObjectPropertyAddress,
+    listener: &'static Listener,
+) -> Result<(), BackendError> {
+    // SAFETY: `addr` is valid for the call (the HAL copies it); `on_change`
+    // matches the listener proc type; the client data is a `'static`
+    // `Listener` that outlives every callback, and `on_change` only reads it
+    // (its mutable parts are atomics and mutexes).
+    let status = unsafe {
+        AudioObjectAddPropertyListener(
+            id,
+            NonNull::from(&addr),
+            Some(on_change),
+            std::ptr::from_ref(listener).cast_mut().cast(),
+        )
+    };
+    check(status, "registering an audio listener")
+}
+
+/// The system object's device list and both defaults.
+fn system_addresses() -> [AudioObjectPropertyAddress; 3] {
+    [
+        kAudioHardwarePropertyDevices,
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioHardwarePropertyDefaultInputDevice,
+    ]
+    .map(|selector| address(selector, kAudioObjectPropertyScopeGlobal, MAIN))
+}
+
+/// A device's stream configuration in both scopes (so a device that gains
+/// or loses channels is re-checked), then volume and mute on every element
+/// it really has, per scope.
+fn device_addresses(id: AudioObjectID) -> Vec<AudioObjectPropertyAddress> {
+    let scopes = [
+        kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyScopeInput,
+    ];
+    let mut out: Vec<_> = scopes
+        .iter()
+        .map(|&scope| address(kAudioDevicePropertyStreamConfiguration, scope, MAIN))
+        .collect();
+    for scope in scopes {
+        let count = channels(id, scope);
+        if count == 0 {
+            continue;
+        }
+        for selector in [kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyMute] {
+            out.extend(
+                elements(id, selector, scope, count)
+                    .into_iter()
+                    .map(|e| address(selector, scope, e)),
+            );
+        }
+    }
+    out
+}
+
+/// Registers on the system object. First asks the HAL to call listeners on
+/// its own thread: the plugin never runs a main run loop, on which the HAL
+/// would otherwise deliver them, so if that fails the listeners can't be
+/// trusted and this fails too.
+fn listen_system(listener: &'static Listener) -> Result<(), BackendError> {
+    set(
+        SYSTEM,
+        address(RUN_LOOP, kAudioObjectPropertyScopeGlobal, MAIN),
+        std::ptr::null::<c_void>(),
+    )
+    .map_err(|e| {
+        BackendError::CoreAudio(format!(
+            "detaching CoreAudio notifications from the run loop: {e}"
+        ))
+    })?;
+    system_addresses()
+        .into_iter()
+        .try_for_each(|a| listen(SYSTEM, a, listener))
+}
+
+/// Registers every listener `id` doesn't have yet. Each one is recorded as
+/// it succeeds, so a retry after a failure never adds one twice.
+fn listen_device(id: AudioObjectID, listener: &'static Listener) -> Result<(), BackendError> {
+    for a in device_addresses(id) {
+        let prop = (id, a.mSelector, a.mScope, a.mElement);
+        if !listener.listened.lock().expect("listened lock").needs(prop) {
+            continue;
+        }
+        listen(id, a, listener)?;
+        listener
+            .listened
+            .lock()
+            .expect("listened lock")
+            .record(prop);
+    }
+    Ok(())
+}
+
+/// Syncs devices that appeared or whose channels changed. A failed device
+/// is marked for the next pass.
+fn listen_devices(listener: &'static Listener) -> Result<(), BackendError> {
+    let ids = device_ids()?;
+    let pending = {
+        let mut listened = listener.listened.lock().expect("listened lock");
+        for id in listener.recheck.lock().expect("recheck lock").drain(..) {
+            listened.forget(id);
+        }
+        listened.new_devices(&ids)
+    };
+    let mut result = Ok(());
+    for id in pending {
+        if let Err(e) = listen_device(id, listener) {
+            listener.listened.lock().expect("listened lock").forget(id);
+            result = Err(e);
+        }
+    }
+    result
+}
+
 /// `tick` is the change channel `subscribe` was given: every successful
 /// write bumps it so the action re-reads the real level (a device may round
 /// the volume to its own steps, so the plugin's prediction can be off).
 #[derive(Default)]
 pub struct CoreAudioBackend {
     tick: std::sync::Mutex<Option<watch::Sender<u64>>>,
+    listener: OnceLock<&'static Listener>,
 }
 
 impl CoreAudioBackend {
     fn written<T>(&self, result: Result<T, BackendError>) -> Result<T, BackendError> {
-        if result.is_ok()
-            && let Some(tx) = self.tick.lock().expect("tick lock").as_ref()
-        {
-            tx.send_modify(|n| *n = n.wrapping_add(1));
+        if result.is_ok() {
+            if let Some(l) = self.listener.get() {
+                l.writes.fetch_add(1, Ordering::SeqCst);
+            }
+            if let Some(tx) = self.tick.lock().expect("tick lock").as_ref() {
+                tx.send_modify(|n| *n = n.wrapping_add(1));
+            }
         }
         result
     }
@@ -399,20 +603,72 @@ impl AudioBackend for CoreAudioBackend {
         Err(BackendError::Unsupported(PER_APP.to_string()))
     }
 
-    /// Re-reads the HAL every `POLL` and bumps `tx` when anything changed;
-    /// stops when every receiver is gone.
+    /// Outside changes arrive through CoreAudio property listeners, which
+    /// bump `tx` themselves. This loop gives new or changed devices their
+    /// listeners and re-reads the HAL only every `hal::SAFETY_POLL` as a
+    /// safety net, or every `POLL` while registration fails or a re-read
+    /// found a change no callback reported. Stops when every receiver is
+    /// gone.
     fn subscribe(&self, tx: watch::Sender<u64>) {
         *self.tick.lock().expect("tick lock") = Some(tx.clone());
+        let listener = *self.listener.get_or_init(|| Listener::leak(tx.clone()));
         tokio::spawn(async move {
+            let system = blocking(move || listen_system(listener)).await;
+            let system_ok = system.is_ok();
+            let mut health = hal::ListenHealth::default();
             let mut last: Option<Snapshot> = None;
-            while !tx.is_closed() {
-                if let Ok(now) = blocking(read_snapshot).await
+            let mut seen = listener.counts();
+            loop {
+                let pass = blocking(move || {
+                    let synced = if system_ok {
+                        listen_devices(listener)
+                    } else {
+                        Ok(())
+                    };
+                    Ok((synced, read_snapshot()))
+                })
+                .await;
+                let (synced, now) = match pass {
+                    Ok((synced, now)) => (synced, now.ok()),
+                    Err(e) => (Err(e), None),
+                };
+                let changed = matches!((&last, &now), (Some(l), Some(n)) if l != n);
+                let mut counts = listener.counts();
+                if changed && counts == seen {
+                    // The callback may still be on its way.
+                    tokio::time::sleep(GRACE).await;
+                    counts = listener.counts();
+                }
+                let heard = counts.0 != seen.0;
+                let missed = changed && counts == seen;
+                seen = counts;
+                let registered = system_ok && synced.is_ok();
+                match health.pass(registered, heard, missed) {
+                    Some(hal::Degraded::Registration) => {
+                        let reason = match (&system, &synced) {
+                            (Err(e), _) | (_, Err(e)) => e.to_string(),
+                            _ => String::new(),
+                        };
+                        log::warn!(
+                            "CoreAudio listeners unavailable ({reason}); re-reading the HAL every {POLL:?}"
+                        );
+                    }
+                    Some(hal::Degraded::Silent) => log::warn!(
+                        "CoreAudio changed without a listener callback; re-reading the HAL every {POLL:?}"
+                    ),
+                    None => {}
+                }
+                if let Some(now) = now
                     && last.as_ref() != Some(&now)
                 {
                     last = Some(now);
                     tx.send_modify(|n| *n = n.wrapping_add(1));
                 }
-                tokio::time::sleep(POLL).await;
+                tokio::select! {
+                    _ = tx.closed() => break,
+                    _ = listener.resync.notified() => {}
+                    _ = tokio::time::sleep(health.poll_interval()) => {}
+                }
             }
         });
     }
@@ -421,6 +677,82 @@ impl AudioBackend for CoreAudioBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use objc2_core_audio::AudioObjectRemovePropertyListener;
+
+    #[test]
+    fn the_routed_selectors_match_the_hal() {
+        assert_eq!(hal::DEVICES_SELECTOR, kAudioHardwarePropertyDevices);
+        assert_eq!(
+            hal::STREAM_CONFIG_SELECTOR,
+            kAudioDevicePropertyStreamConfiguration
+        );
+    }
+
+    /// The callback glue, called as the HAL would (no device needed): it
+    /// counts, bumps the channel, and queues a re-check for a device whose
+    /// channels changed. Whether the HAL really delivers callbacks can't be
+    /// triggered deterministically on a runner without audio devices.
+    #[test]
+    fn the_callback_bumps_counts_and_queues_rechecks() {
+        let (tx, rx) = watch::channel(0u64);
+        let listener = Listener::leak(tx);
+        let client = std::ptr::from_ref(listener).cast_mut().cast();
+        let mut volume = [address(
+            kAudioDevicePropertyVolumeScalar,
+            kAudioObjectPropertyScopeOutput,
+            MAIN,
+        )];
+        // SAFETY: one valid address, and the client data `on_change` expects.
+        unsafe { on_change(7, 1, NonNull::from(&mut volume).cast(), client) };
+        assert_eq!(*rx.borrow(), 1);
+        assert_eq!(listener.counts(), (1, 0));
+        assert!(listener.recheck.lock().unwrap().is_empty());
+        let mut config = [address(
+            kAudioDevicePropertyStreamConfiguration,
+            kAudioObjectPropertyScopeInput,
+            MAIN,
+        )];
+        // SAFETY: as above.
+        unsafe { on_change(7, 1, NonNull::from(&mut config).cast(), client) };
+        assert_eq!(*rx.borrow(), 2);
+        assert_eq!(*listener.recheck.lock().unwrap(), [7]);
+    }
+
+    /// Needs no audio device: the system object always exists.
+    #[test]
+    fn a_system_listener_registers_and_unregisters() {
+        let listener = Listener::leak(watch::channel(0).0);
+        let mut addr = address(
+            kAudioHardwarePropertyDefaultOutputDevice,
+            kAudioObjectPropertyScopeGlobal,
+            MAIN,
+        );
+        listen(SYSTEM, addr, listener).expect("registering on the system object");
+        // SAFETY: the same address, proc and client data as registered above.
+        let status = unsafe {
+            AudioObjectRemovePropertyListener(
+                SYSTEM,
+                NonNull::from(&mut addr),
+                Some(on_change),
+                std::ptr::from_ref(listener).cast_mut().cast(),
+            )
+        };
+        assert_eq!(status, 0);
+    }
+
+    #[tokio::test]
+    async fn subscribing_then_dropping_the_receiver_does_not_panic() {
+        let backend = CoreAudioBackend::default();
+        let (tx, rx) = watch::channel(0u64);
+        backend.subscribe(tx);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        drop(rx);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // A write still bumps the (now receiver-less) channel without panicking.
+        let _ = backend
+            .set_mute(&Node::Sink("no-such-uid".into()), Mute::On)
+            .await;
+    }
 
     /// Runs on the macOS CI runner, which may have no audio device at all:
     /// the HAL must answer without crashing, whatever it reports.

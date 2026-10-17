@@ -31,8 +31,8 @@ customizable actions for keys and dials:
   from `~/Library/Application Support/opendeck`.
 - Not available on macOS: the **Application** audio target (macOS has no public
   API for another app's volume or output device) and volumes above 100 %.
-- OpenDeck's config changes are picked up within about a second (polled; Linux
-  uses inotify).
+- OpenDeck's config changes are picked up as they are written (kqueue, as Linux
+  uses inotify), with a 30 s re-check as a safety net.
 
 ## How brightness and profile switching work
 
