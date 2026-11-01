@@ -32,10 +32,14 @@ customizable actions for keys and dials:
 
 - PipeWire (or PulseAudio) and `pactl` 16 or newer on `PATH`
   (the plugin reads `pactl -f json` output, added in version 16).
-- OpenDeck installed natively (config in `~/.config/opendeck`). Tested on
-  OpenDeck 2.14.0 (native, Fedora). The Flatpak (config in
-  `~/.var/app/me.amankhanna.opendeck/config/opendeck`) is supported in the code
-  but untested; inside its sandbox `pactl` and `opendeck` may not be on `PATH`.
+- OpenDeck installed natively (config in `~/.config/opendeck`), tested on
+  OpenDeck 2.14.0 (native, Fedora), or as the Flatpak (config in
+  `~/.var/app/me.amankhanna.opendeck/config/opendeck`). Inside the Flatpak the
+  plugin runs the host's `pactl` through `flatpak-spawn --host`, so `pactl` must be
+  installed on the host and the Flatpak must be allowed to talk to
+  `org.freedesktop.Flatpak`; brightness and profile requests run OpenDeck's own
+  binary inside the sandbox. The Flatpak path is unit-tested only; its checklist
+  item below has not been run yet.
 
 **macOS** (Apple Silicon):
 
@@ -162,6 +166,14 @@ maintainer's project notes (kept outside this repository), which the release not
 - [ ] Holding a finger on the strip switches to the first profile in the dial's
       list. With "Touch strip tap" set to the half step, tapping the right half
       switches to the next profile at once and the left half to the previous one.
+
+**Flatpak OpenDeck** (optional; run when a Flatpak OpenDeck is available, e.g. in a VM)
+
+- [ ] With the bundle unzipped into the Flatpak's plugins folder, the plugin log says
+      it runs inside a Flatpak; an Audio dial shows the level and mutes on press,
+      and follows a volume change made outside OpenDeck; a brightness dial and a
+      Switch Profile dial work without an alert. After quitting OpenDeck, no
+      `pactl subscribe` is left running on the host (`pgrep -a pactl`).
 
 On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
 

@@ -156,9 +156,56 @@ fn spawn_error(e: std::io::Error) -> BackendError {
 /// `pactl subscribe` event lines) are gettext-translated, so force the C
 /// locale to keep them parseable.
 fn pactl_command() -> Command {
-    let mut cmd = Command::new(PACTL);
+    pactl_command_for(in_flatpak())
+}
+
+/// Under a Flatpak OpenDeck the plugin shares its sandbox, which has no
+/// `pactl`: run the host's through `flatpak-spawn --host` (as
+/// focus-launcher does). The host process gets the C locale through
+/// `--env` (the sandbox's environment isn't passed on) and `--watch-bus`
+/// ends it if `flatpak-spawn` dies, e.g. killed by `die_with_parent` or a
+/// timeout, which it can't forward. No shell either way: argv only.
+fn pactl_command_for(sandboxed: bool) -> Command {
+    let mut cmd = if sandboxed {
+        let mut cmd = Command::new(FLATPAK_SPAWN);
+        cmd.args([
+            "--host",
+            "--watch-bus",
+            "--env=LC_ALL=C",
+            "--env=LANGUAGE=C",
+            PACTL,
+        ]);
+        cmd
+    } else {
+        Command::new(PACTL)
+    };
     cmd.env("LC_ALL", "C").env("LANGUAGE", "C");
     cmd
+}
+
+const FLATPAK_SPAWN: &str = "flatpak-spawn";
+
+/// Whether the plugin runs inside a Flatpak sandbox (OpenDeck installed as
+/// a Flatpak): checked once, the way Flatpak apps detect it.
+fn in_flatpak() -> bool {
+    static SANDBOXED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SANDBOXED.get_or_init(|| {
+        let sandboxed = sandbox_markers(
+            std::path::Path::new("/.flatpak-info").exists(),
+            std::env::var_os("FLATPAK_ID").is_some(),
+        );
+        if sandboxed {
+            log::info!("running inside a Flatpak: pactl goes through flatpak-spawn --host");
+        }
+        sandboxed
+    })
+}
+
+/// Either marker is enough: `/.flatpak-info` exists in every Flatpak
+/// sandbox, and `FLATPAK_ID` is set for the app and inherited by its
+/// children (the plugin).
+fn sandbox_markers(info_file: bool, flatpak_id: bool) -> bool {
+    info_file || flatpak_id
 }
 
 /// Makes the child die with the plugin. `kill_on_drop` only fires on an
@@ -453,8 +500,42 @@ mod tests {
     }
 
     #[test]
+    fn a_flatpak_is_detected_by_either_marker() {
+        assert!(!sandbox_markers(false, false));
+        assert!(sandbox_markers(true, false));
+        assert!(sandbox_markers(false, true));
+    }
+
+    /// Feature (keep and test the Flatpak path): inside the sandbox the
+    /// host's `pactl` runs through `flatpak-spawn --host`, in the C locale
+    /// and tied to `flatpak-spawn`'s life; outside, `pactl` runs directly.
+    #[test]
+    fn a_flatpak_runs_the_hosts_pactl_in_the_c_locale() {
+        let mut cmd = pactl_command_for(true);
+        cmd.args(["-f", "json", "info"]);
+        let std = cmd.as_std();
+        assert_eq!(std.get_program(), FLATPAK_SPAWN);
+        let args: Vec<_> = std.get_args().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            [
+                "--host",
+                "--watch-bus",
+                "--env=LC_ALL=C",
+                "--env=LANGUAGE=C",
+                PACTL,
+                "-f",
+                "json",
+                "info"
+            ]
+        );
+        assert_eq!(pactl_command_for(false).as_std().get_program(), PACTL);
+        assert_eq!(pactl_command_for(false).as_std().get_args().count(), 0);
+    }
+
+    #[test]
     fn pactl_runs_in_the_c_locale() {
-        let cmd = pactl_command();
+        let cmd = pactl_command_for(false);
         let envs: Vec<_> = cmd.as_std().get_envs().collect();
         assert_eq!(cmd.as_std().get_program(), PACTL);
         for key in ["LC_ALL", "LANGUAGE"] {
