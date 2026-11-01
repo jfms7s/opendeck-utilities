@@ -163,6 +163,15 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_all_inputs_target_reads_back() {
+        let s: AudioSettings = serde_json::from_value(json!({ "target": "all_inputs" })).unwrap();
+        assert_eq!(s.target, TargetKind::AllInputs);
+        let back: AudioSettings =
+            serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
     fn garbled_settings_fall_back_to_defaults() {
         let s: AudioSettings = serde_json::from_value(json!({
             "target": "bogus",

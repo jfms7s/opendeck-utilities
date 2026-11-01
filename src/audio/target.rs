@@ -1,7 +1,7 @@
 //! Which device or app streams a control acts on, resolved against a
 //! snapshot. Pure - no I/O.
 
-use super::model::{Device, DeviceKind, Snapshot, Stream};
+use super::model::{Device, DeviceKind, Snapshot, Stream, is_monitor};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -13,6 +13,9 @@ pub enum TargetKind {
     Output,
     Input,
     App,
+    /// Every microphone: mute acts on all of them, volume and device
+    /// switching on the default one.
+    AllInputs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +27,12 @@ pub enum Resolved {
     /// Never empty.
     App {
         streams: Vec<Stream>,
+    },
+    /// Every non-monitor input (never empty); `default` is the default
+    /// source, or the first input when the default is missing.
+    Inputs {
+        devices: Vec<Device>,
+        default: Device,
     },
     Unavailable {
         label: String,
@@ -47,9 +56,17 @@ impl Resolved {
                     }
                 })
                 .unwrap_or_default(),
+            Resolved::Inputs { .. } => ALL_INPUTS.to_string(),
             Resolved::Unavailable { label } | Resolved::NotPlaying { label } => label.clone(),
         }
     }
+}
+
+const ALL_INPUTS: &str = "All inputs";
+
+/// Every input is muted: an `Inputs` target reads as muted only then.
+pub fn all_muted(devices: &[Device]) -> bool {
+    devices.iter().all(|d| d.muted)
 }
 
 pub fn app_matches(stream: &Stream, name: &str) -> bool {
@@ -95,6 +112,25 @@ pub fn resolve(kind: TargetKind, name: &str, snap: &Snapshot) -> Resolved {
         TargetKind::App if name.is_empty() => Resolved::Unavailable {
             label: "pick an app".to_string(),
         },
+        TargetKind::AllInputs => {
+            let devices: Vec<Device> = snap
+                .sources
+                .iter()
+                .filter(|d| !is_monitor(&d.name))
+                .cloned()
+                .collect();
+            let default = devices
+                .iter()
+                .find(|d| d.name == snap.default_source)
+                .or_else(|| devices.first())
+                .cloned();
+            match default {
+                Some(default) => Resolved::Inputs { devices, default },
+                None => Resolved::Unavailable {
+                    label: "no inputs".to_string(),
+                },
+            }
+        }
         TargetKind::App => {
             let streams: Vec<Stream> = snap
                 .streams
@@ -238,5 +274,68 @@ mod tests {
             "Razer Leviathan V2 Analog Stereo"
         );
         assert_eq!(resolve(TargetKind::App, "spotify", &s).label(), "Spotify");
+    }
+
+    fn two_inputs() -> Snapshot {
+        let mut snap = fixture_snapshot();
+        let mut other = snap.sources[0].clone();
+        other.index = 71;
+        other.name = "alsa_input.pci-analog-stereo".into();
+        other.description = "Analog mic".into();
+        other.muted = false;
+        snap.sources.push(other);
+        snap
+    }
+
+    #[test]
+    fn all_inputs_lists_every_input_with_the_default_first_choice() {
+        let r = resolve(TargetKind::AllInputs, "ignored", &two_inputs());
+        let Resolved::Inputs { devices, default } = &r else {
+            panic!("{r:?}")
+        };
+        assert_eq!(
+            devices.iter().map(|d| d.index).collect::<Vec<_>>(),
+            vec![70, 71]
+        );
+        assert_eq!(default.index, 70);
+        assert_eq!(r.label(), "All inputs");
+    }
+
+    #[test]
+    fn all_inputs_never_includes_a_monitor() {
+        let mut snap = two_inputs();
+        let mut monitor = snap.sources[0].clone();
+        monitor.index = 72;
+        monitor.name = "alsa_output.usb-Razer_Razer_Leviathan_V2-00.analog-stereo.monitor".into();
+        snap.sources.push(monitor);
+        let Resolved::Inputs { devices, .. } = resolve(TargetKind::AllInputs, "", &snap) else {
+            panic!()
+        };
+        assert!(devices.iter().all(|d| !d.name.ends_with(".monitor")));
+        assert_eq!(devices.len(), 2);
+    }
+
+    #[test]
+    fn all_inputs_falls_back_to_the_first_input_and_needs_one() {
+        let mut snap = two_inputs();
+        snap.default_source = "gone".into();
+        let Resolved::Inputs { default, .. } = resolve(TargetKind::AllInputs, "", &snap) else {
+            panic!()
+        };
+        assert_eq!(default.index, 70);
+        snap.sources.clear();
+        assert_eq!(
+            resolve(TargetKind::AllInputs, "", &snap),
+            Resolved::Unavailable {
+                label: "no inputs".into()
+            }
+        );
+    }
+
+    #[test]
+    fn all_inputs_round_trips_as_snake_case() {
+        let k: TargetKind = serde_json::from_str("\"all_inputs\"").unwrap();
+        assert_eq!(k, TargetKind::AllInputs);
+        assert_eq!(serde_json::to_string(&k).unwrap(), "\"all_inputs\"");
     }
 }

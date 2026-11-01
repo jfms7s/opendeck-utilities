@@ -134,6 +134,7 @@ fn audio_options_name_real_variants() {
             TargetKind::Output,
             TargetKind::Input,
             TargetKind::App,
+            TargetKind::AllInputs,
         ],
     );
     all_parse_as(
