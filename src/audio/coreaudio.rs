@@ -286,10 +286,6 @@ impl Seen {
     fn record(&self, now: Snapshot) -> bool {
         hal::record(&mut self.last.lock().expect("last lock"), now)
     }
-
-    fn has_last(&self) -> bool {
-        self.last.lock().expect("last lock").is_some()
-    }
 }
 
 fn read_snapshot(seen: &Seen) -> Result<Snapshot, BackendError> {
@@ -612,8 +608,9 @@ impl CoreAudioBackend {
     /// plugin's prediction can be off. This is the platform difference:
     /// on Linux the action trusts its prediction and `pactl subscribe`
     /// reports the change; on macOS it re-reads once after each write.
-    /// That re-read is recorded in `seen`, so `subscribe`'s safety re-read
-    /// doesn't report the same change a second time.
+    /// The action's re-read (from this bump; volume and mute are predicted,
+    /// so it doesn't refresh on its own) is recorded in `seen`, so
+    /// `subscribe`'s safety re-read doesn't report the same change again.
     fn written<T>(&self, result: Result<T, BackendError>) -> Result<T, BackendError> {
         if result.is_ok() {
             if let Some(l) = self.listener.get() {
@@ -673,6 +670,9 @@ impl AudioBackend for CoreAudioBackend {
             let system = blocking(move || listen_system(listener)).await;
             let system_ok = system.is_ok();
             let mut health = hal::ListenHealth::default();
+            // This loop's own previous read, for the liveness check: a
+            // change counts as missed by the listeners whoever read it.
+            let mut previous: Option<Snapshot> = None;
             let mut seen = listener.counts();
             loop {
                 let read_state = state.clone();
@@ -689,10 +689,12 @@ impl AudioBackend for CoreAudioBackend {
                     Ok((synced, now)) => (synced, now.ok()),
                     Err(e) => (Err(e), None),
                 };
-                let had_last = state.has_last();
-                let unread = now.is_some_and(|now| state.record(now));
-                // A change since the previous read, for the liveness check.
-                let changed = had_last && unread;
+                let changed = matches!((&previous, &now), (Some(p), Some(n)) if p != n);
+                // Bump only for a state nobody has read yet.
+                let unread = now.as_ref().is_some_and(|now| state.record(now.clone()));
+                if now.is_some() {
+                    previous = now;
+                }
                 let mut counts = listener.counts();
                 if changed && counts == seen {
                     // The callback may still be on its way.

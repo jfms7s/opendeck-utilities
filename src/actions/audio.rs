@@ -142,8 +142,11 @@ impl AudioAction {
         let result = self.read().await;
         let mut slot = self.shared.snapshot.write().await;
         if result.is_ok() && self.shared.local_writes.load(Ordering::SeqCst) != writes {
-            // Read before a local update landed; the change it made
-            // triggers another refresh.
+            // Read before a local update landed. Ask the watcher for another
+            // read rather than trusting the change channel to bump again:
+            // a backend may count this read as delivered (CoreAudio's
+            // `Seen::record`), and it may hold an outside change too.
+            self.shared.kick.notify_one();
             return;
         }
         *slot = result;
@@ -1059,6 +1062,12 @@ mod tests {
                 format!("volume Sink({RAZER:?}) 57"),
             ]
         );
+        // The dropped read asked the watcher for a fresh one (adversarial
+        // review: CoreAudio counts the dropped read as delivered, so no
+        // change tick may follow).
+        tokio::time::timeout(Duration::from_millis(1), r.action.shared.kick.notified())
+            .await
+            .expect("the dropped refresh kicks the watcher");
     }
 
     #[tokio::test]
