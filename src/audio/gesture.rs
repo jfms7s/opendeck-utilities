@@ -2,8 +2,7 @@
 //! settings. Pure - timing is passed in, not measured here.
 
 use super::settings::{AudioSettings, GestureSetting, OpKind, RotateKind};
-pub use crate::controller::Controller;
-use crate::controller::{Half, strip_half};
+use crate::controller::{Controller, Half, strip_half};
 use std::time::Duration;
 
 pub const LONG_PRESS: Duration = Duration::from_millis(500);

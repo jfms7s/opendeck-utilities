@@ -76,6 +76,7 @@ impl<'de> Deserialize<'de> for BrightnessSettings {
 }
 
 impl BrightnessSettings {
+    /// `Deserialize` already clamps; this repeats it for values set in code.
     fn step(&self) -> u8 {
         self.step.clamp(*STEP.start(), *STEP.end())
     }
@@ -131,6 +132,7 @@ pub fn rotate_request(current: Option<u8>, ticks: i16, s: &BrightnessSettings) -
 
 /// Goes to preset B when currently at preset A, otherwise to preset A.
 pub fn toggle_request(current: Option<u8>, s: &BrightnessSettings) -> Request {
+    // `Deserialize` already clamps; this repeats it for values set in code.
     let (a, b) = (s.preset_a.min(100), s.preset_b.min(100));
     set_request(if current == Some(a) { b } else { a })
 }
