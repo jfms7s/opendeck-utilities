@@ -54,12 +54,44 @@ pub struct Snapshot {
     /// Apps recording from an input; never a monitor source or a level
     /// meter's peak-detect stream. Always empty on macOS.
     pub recorders: Vec<Recorder>,
-    /// The audio system has no per-app streams (CoreAudio on macOS), so App
-    /// targets can't work at all - not just "not playing" right now.
-    pub apps_unsupported: bool,
+    /// What the backend that read this snapshot can do. Each backend fills
+    /// it from its own constant (`Capabilities::PACTL`,
+    /// `hal::CAPABILITIES`).
+    pub caps: Capabilities,
+}
+
+/// What an audio backend can do, and how the deck and the page say what it
+/// can't. One struct so a new capability is added here, in each backend's
+/// constant and in `pi.js`'s `applyCapabilities`, not threaded field by
+/// field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Per-app streams exist. When false (CoreAudio on macOS), App targets
+    /// can't work at all - not just "not playing" right now.
+    pub per_app: bool,
     /// The highest volume the audio system accepts (CoreAudio: 100, no
     /// boost); `None` when `max_volume` alone decides (PipeWire allows 150).
     pub volume_cap: Option<u16>,
+    /// Tile label for an App target the backend can't serve.
+    pub unsupported_label: &'static str,
+    /// The page's note after "Application" when per-app is unsupported.
+    pub unsupported_note: &'static str,
+}
+
+impl Capabilities {
+    /// `pactl` on PipeWire/PulseAudio: per-app streams, volume up to 150.
+    pub const PACTL: Capabilities = Capabilities {
+        per_app: true,
+        volume_cap: None,
+        unsupported_label: "",
+        unsupported_note: "",
+    };
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Self::PACTL
+    }
 }
 
 impl Snapshot {
@@ -258,8 +290,7 @@ pub fn build_snapshot(
         sources,
         streams,
         recorders,
-        apps_unsupported: false,
-        volume_cap: None,
+        caps: Capabilities::PACTL,
     })
 }
 

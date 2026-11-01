@@ -34,12 +34,14 @@ pub enum Mute {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
-    #[error("pactl not found")]
-    NotInstalled,
+    /// The backend's tool (named) is missing.
+    #[error("{0} not found")]
+    NotInstalled(&'static str),
     #[error("pactl {args} failed: {stderr}")]
     Failed { args: String, stderr: String },
-    #[error("pactl timed out")]
-    Timeout,
+    /// The backend's tool (named) didn't answer in time.
+    #[error("{0} timed out")]
+    Timeout(&'static str),
     #[error(transparent)]
     Parse(#[from] ParseError),
     #[error("nothing to act on")]
@@ -56,6 +58,17 @@ pub enum BackendError {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     #[error("CoreAudio: {0}")]
     CoreAudio(String),
+}
+
+impl BackendError {
+    /// The few words a tile has room for: the missing tool by name (the
+    /// one error a user can fix), "audio error" for everything else.
+    pub fn short(&self) -> String {
+        match self {
+            BackendError::NotInstalled(tool) => format!("{tool} not found"),
+            _ => "audio error".to_string(),
+        }
+    }
 }
 
 /// The audio system: read it, change it, and hear about changes made
@@ -146,7 +159,7 @@ pub fn move_args(stream: u32, sink: &str) -> Vec<String> {
 
 fn spawn_error(e: std::io::Error) -> BackendError {
     if e.kind() == std::io::ErrorKind::NotFound {
-        BackendError::NotInstalled
+        BackendError::NotInstalled(PACTL)
     } else {
         BackendError::Io(e)
     }
@@ -255,7 +268,7 @@ impl PactlBackend {
             pactl_command().args(args).kill_on_drop(true).output(),
         )
         .await
-        .map_err(|_| BackendError::Timeout)?
+        .map_err(|_| BackendError::Timeout(PACTL))?
         .map_err(spawn_error)?;
         if !output.status.success() {
             return Err(BackendError::Failed {
@@ -343,7 +356,7 @@ pub fn is_relevant_event(line: &str) -> bool {
 
 /// A missing `pactl` will not appear by retrying (spec §7).
 pub fn should_retry(e: &BackendError) -> bool {
-    !matches!(e, BackendError::NotInstalled)
+    !matches!(e, BackendError::NotInstalled(_))
 }
 
 pub fn next_backoff(current: Duration) -> Duration {
@@ -587,8 +600,8 @@ mod tests {
 
     #[test]
     fn missing_pactl_is_not_retried() {
-        assert!(!should_retry(&BackendError::NotInstalled));
-        assert!(should_retry(&BackendError::Timeout));
+        assert!(!should_retry(&BackendError::NotInstalled(PACTL)));
+        assert!(should_retry(&BackendError::Timeout(PACTL)));
         assert!(should_retry(&BackendError::Io(std::io::Error::other("x"))));
     }
 

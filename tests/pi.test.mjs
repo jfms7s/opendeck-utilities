@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { mergeSubset, clampInt, volumeLimit } = require("../assets/propertyInspector/pi.js");
+const { mergeSubset, clampInt, volumeLimit, applyCapabilities } = require("../assets/propertyInspector/pi.js");
 
 test("a stored name with no checkbox survives an unrelated save", () => {
 	// Headset H is unplugged, so only A and B are listed; the user edits the label.
@@ -38,4 +38,27 @@ test("a volume cap lowers the offered maximum; no cap leaves it", () => {
 	assert.equal(volumeLimit(null, 150), 150);
 	assert.equal(volumeLimit(undefined, 150), 150);
 	assert.equal(volumeLimit(200, 150), 150);
+});
+
+test("pactl capabilities offer the App target and volume up to the bound", () => {
+	const caps = { perApp: true, volumeCap: null, unsupportedNote: "" };
+	assert.deepEqual(applyCapabilities(caps, 150), {
+		appOption: { disabled: false, label: "Application" },
+		volumeCap: null,
+		volumeLimit: 150,
+	});
+});
+
+test("CoreAudio capabilities disable the App target with the backend's note and cap volume", () => {
+	const caps = { perApp: false, volumeCap: 100, unsupportedNote: "not supported on macOS" };
+	assert.deepEqual(applyCapabilities(caps, 150), {
+		appOption: { disabled: true, label: "Application (not supported on macOS)" },
+		volumeCap: 100,
+		volumeLimit: 100,
+	});
+});
+
+test("no capabilities yet means everything is supported", () => {
+	assert.deepEqual(applyCapabilities(undefined, 150).appOption, { disabled: false, label: "Application" });
+	assert.equal(applyCapabilities(undefined, 150).volumeLimit, 150);
 });

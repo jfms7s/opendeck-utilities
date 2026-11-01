@@ -140,7 +140,7 @@ impl AudioSettings {
     }
 
     /// `max_volume`, but never above what the audio system accepts
-    /// (`Snapshot::volume_cap`: 100 on macOS, none on PipeWire).
+    /// (`Capabilities::volume_cap`: 100 on macOS, none on PipeWire).
     pub fn effective_max(&self, cap: Option<u16>) -> u16 {
         self.max_volume().min(cap.unwrap_or(u16::MAX))
     }

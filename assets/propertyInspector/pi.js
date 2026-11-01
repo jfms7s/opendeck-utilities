@@ -34,6 +34,26 @@
 		return Math.min(bound, cap ?? bound);
 	}
 
+	/**
+	 * What the page does with the plugin's `capabilities` block: the App
+	 * target option (kept so a saved App control still shows what it is,
+	 * disabled with the backend's reason when there's no per-app audio) and
+	 * the highest volume to offer below a setting's upper `bound`. A missing
+	 * block means everything is supported.
+	 */
+	function applyCapabilities(caps, bound) {
+		const perApp = caps?.perApp !== false;
+		const note = caps?.unsupportedNote;
+		return {
+			appOption: {
+				disabled: !perApp,
+				label: perApp || !note ? "Application" : `Application (${note})`,
+			},
+			volumeCap: caps?.volumeCap ?? null,
+			volumeLimit: volumeLimit(caps?.volumeCap, bound),
+		};
+	}
+
 	/** The JSON in `<script type="application/json" id="…">`. */
 	function readJson(id) {
 		return JSON.parse(document.getElementById(id).textContent);
@@ -78,7 +98,7 @@
 		};
 	}
 
-	const api = { mergeSubset, clampInt, volumeLimit, readJson, connect };
+	const api = { mergeSubset, clampInt, volumeLimit, applyCapabilities, readJson, connect };
 	if (typeof module === "object" && module.exports) {
 		module.exports = api;
 	} else {

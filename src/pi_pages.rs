@@ -16,6 +16,7 @@ use std::ops::RangeInclusive;
 const AUDIO: &str = include_str!("../assets/propertyInspector/audio.html");
 const BRIGHTNESS: &str = include_str!("../assets/propertyInspector/brightness.html");
 const PROFILE: &str = include_str!("../assets/propertyInspector/profile.html");
+const PI_JS: &str = include_str!("../assets/propertyInspector/pi.js");
 
 /// The JSON inside `<script type="application/json" id="{id}">`.
 fn page_json(html: &str, id: &str) -> Value {
@@ -180,6 +181,13 @@ fn audio_page_reads_every_choice_the_plugin_sends() {
         assert!(
             AUDIO.contains(&format!("choices.{key}")) || AUDIO.contains(&format!("choices?.{key}")),
             "{key}"
+        );
+    }
+    // The capabilities block is read generically by `pi.js`.
+    for key in c["capabilities"].as_object().unwrap().keys() {
+        assert!(
+            PI_JS.contains(&format!("caps?.{key}")),
+            "capabilities.{key}"
         );
     }
     assert!(AUDIO.contains(r#""audioChoices""#));
