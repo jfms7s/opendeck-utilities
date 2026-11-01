@@ -41,9 +41,13 @@ pub fn choices(
         "outputs": devices(&snap.sinks),
         "inputs": devices(&snap.sources),
         "apps": apps,
-        "appsSupported": !snap.apps_unsupported,
-        // The highest volume the backend accepts (null: no cap).
-        "volumeCap": snap.volume_cap,
+        // What the backend can do; `pi.js` `applyCapabilities` reads it.
+        "capabilities": {
+            "perApp": snap.caps.per_app,
+            // The highest volume the backend accepts (null: no cap).
+            "volumeCap": snap.caps.volume_cap,
+            "unsupportedNote": snap.caps.unsupported_note,
+        },
         "effective": {
             "press": e.press,
             "long_press": e.long_press,
@@ -63,20 +67,25 @@ mod tests {
     fn says_whether_per_app_audio_exists_here() {
         let mut snap = fixture_snapshot();
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
-        assert_eq!(c["appsSupported"], true);
-        snap.apps_unsupported = true;
+        assert_eq!(c["capabilities"]["perApp"], true);
+        assert_eq!(c["capabilities"]["unsupportedNote"], "");
+        snap.caps = crate::audio::hal::CAPABILITIES;
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
-        assert_eq!(c["appsSupported"], false);
+        assert_eq!(c["capabilities"]["perApp"], false);
+        assert_eq!(
+            c["capabilities"]["unsupportedNote"],
+            "not supported on macOS"
+        );
     }
 
     #[test]
     fn says_whether_volume_is_capped_here() {
         let mut snap = fixture_snapshot();
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
-        assert_eq!(c["volumeCap"], Value::Null);
-        snap.volume_cap = Some(100);
+        assert_eq!(c["capabilities"]["volumeCap"], Value::Null);
+        snap.caps = crate::audio::hal::CAPABILITIES;
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
-        assert_eq!(c["volumeCap"], 100);
+        assert_eq!(c["capabilities"]["volumeCap"], 100);
     }
 
     #[test]

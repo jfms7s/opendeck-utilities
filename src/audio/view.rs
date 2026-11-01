@@ -74,7 +74,7 @@ fn inactive(settings: &AudioSettings, label: &str, status: &str) -> LevelView {
 /// `recorders`: the apps recording from the target's input(s)
 /// (`target::recorders_for`). While any records, the title names them in
 /// place of the label, muted or not: the point is knowing who has the mic.
-/// `cap`: the backend's volume cap (`Snapshot::volume_cap`), so a device at
+/// `cap`: the backend's volume cap (`Capabilities::volume_cap`), so a device at
 /// the cap shows a full bar.
 pub fn audio_view(
     resolved: &Resolved,

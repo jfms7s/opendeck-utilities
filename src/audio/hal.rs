@@ -2,7 +2,7 @@
 //! `Snapshot`. Platform-neutral so it is tested everywhere; only
 //! `coreaudio.rs` (macOS) reads the real HAL.
 
-use super::model::{Device, Snapshot};
+use super::model::{Capabilities, Device, Snapshot};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -12,6 +12,14 @@ pub const POLL: Duration = Duration::from_millis(500);
 /// With listeners, changes arrive as callbacks; this slow re-read is only a
 /// safety net for a missed one.
 pub const SAFETY_POLL: Duration = Duration::from_secs(10);
+
+/// CoreAudio has no per-app streams and no boost above 100 %.
+pub const CAPABILITIES: Capabilities = Capabilities {
+    per_app: false,
+    volume_cap: Some(100),
+    unsupported_label: "not on macOS",
+    unsupported_note: "not supported on macOS",
+};
 
 /// `kAudioHardwarePropertyDevices` (`'dev#'`): the system object's device
 /// list. Own copies of the selectors so the routing below is tested on
@@ -221,8 +229,7 @@ pub fn build_snapshot(
         streams: Vec::new(),
         // No app names for the mic on macOS (Linux only in v1).
         recorders: Vec::new(),
-        apps_unsupported: true,
-        volume_cap: Some(100),
+        caps: CAPABILITIES,
     }
 }
 
@@ -291,8 +298,8 @@ mod tests {
         assert_eq!(snap.default_name(DeviceKind::Output), "headset");
         assert_eq!(snap.default_name(DeviceKind::Input), "mic");
         assert!(snap.streams.is_empty());
-        assert!(snap.apps_unsupported);
-        assert_eq!(snap.volume_cap, Some(100));
+        assert!(!snap.caps.per_app);
+        assert_eq!(snap.caps.volume_cap, Some(100));
         let headset_in = &snap.devices(DeviceKind::Input)[0];
         assert_eq!(
             (headset_in.index, headset_in.volume, headset_in.muted),

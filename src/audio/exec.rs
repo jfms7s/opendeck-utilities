@@ -43,7 +43,7 @@ async fn execute_on_device(
     settings: &AudioSettings,
     op: &Operation,
 ) -> Result<(), BackendError> {
-    let max = settings.effective_max(snap.volume_cap);
+    let max = settings.effective_max(snap.caps.volume_cap);
     match op {
         Operation::None => Ok(()),
         Operation::ToggleMute => backend.set_mute(node, Mute::Toggle).await,
@@ -86,7 +86,7 @@ async fn execute_on_app(
     let Some(first) = streams.first() else {
         return Err(BackendError::NoTarget);
     };
-    let max = settings.effective_max(snap.volume_cap);
+    let max = settings.effective_max(snap.caps.volume_cap);
     match op {
         Operation::None => Ok(()),
         // Streams are set to one explicit state rather than each toggled,
@@ -181,9 +181,13 @@ pub fn apply_locally(
 ) -> bool {
     match resolved {
         Resolved::Device { kind, device } => {
-            let Some((volume, muted)) =
-                predicted(device.volume, device.muted, settings, snap.volume_cap, op)
-            else {
+            let Some((volume, muted)) = predicted(
+                device.volume,
+                device.muted,
+                settings,
+                snap.caps.volume_cap,
+                op,
+            ) else {
                 return false;
             };
             let list = match kind {
@@ -200,9 +204,13 @@ pub fn apply_locally(
             let Some(first) = streams.first() else {
                 return true;
             };
-            let Some((volume, muted)) =
-                predicted(first.volume, first.muted, settings, snap.volume_cap, op)
-            else {
+            let Some((volume, muted)) = predicted(
+                first.volume,
+                first.muted,
+                settings,
+                snap.caps.volume_cap,
+                op,
+            ) else {
                 return false;
             };
             for s in snap
@@ -333,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn the_platform_volume_cap_beats_max_volume() {
         let mut snap = fixture_snapshot();
-        snap.volume_cap = Some(100);
+        snap.caps = crate::audio::hal::CAPABILITIES;
         for d in &mut snap.sinks {
             d.volume = 95;
         }

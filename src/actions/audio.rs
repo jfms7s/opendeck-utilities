@@ -1,5 +1,5 @@
 use super::{Control, Instances, is_choices_request};
-use crate::audio::backend::{AudioBackend, BackendError};
+use crate::audio::backend::AudioBackend;
 use crate::audio::exec::{apply_locally, execute};
 use crate::audio::gesture::{self, Operation};
 use crate::audio::model::Snapshot;
@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, Notify, RwLock, watch};
 
-/// Coalesces a burst of `pactl subscribe` events (one dial turn can emit
+/// Coalesces a burst of backend change events (one dial turn can emit
 /// several) into one refresh.
 pub const DEBOUNCE: Duration = Duration::from_millis(50);
 
@@ -36,7 +36,7 @@ struct Job {
 }
 
 /// Operations run in order on one worker task, off the event loop. Turning
-/// a dial queues volume steps faster than `pactl` applies them; consecutive
+/// a dial queues volume steps faster than the backend applies them; consecutive
 /// steps on the same control are summed into one call.
 #[derive(Default)]
 struct Queue {
@@ -77,7 +77,7 @@ struct Shared {
     /// Last snapshot, or a short message for why there is none.
     snapshot: RwLock<Result<Snapshot, String>>,
     /// Bumped by every local update of `snapshot`, so a refresh that read
-    /// `pactl` before that update can't roll the shown level back.
+    /// the backend before that update can't roll the shown level back.
     local_writes: AtomicU64,
     /// Changes were skipped while no Audio control was visible.
     stale: AtomicBool,
@@ -98,13 +98,6 @@ struct Shared {
 #[derive(Clone)]
 pub struct AudioAction {
     shared: Arc<Shared>,
-}
-
-fn short_error(e: &BackendError) -> String {
-    match e {
-        BackendError::NotInstalled => "pactl not found".to_string(),
-        _ => "audio error".to_string(),
-    }
 }
 
 impl AudioAction {
@@ -140,7 +133,7 @@ impl AudioAction {
     async fn read(&self) -> Result<Snapshot, String> {
         self.shared.backend.snapshot().await.map_err(|e| {
             log::warn!("audio snapshot failed: {e}");
-            short_error(&e)
+            e.short()
         })
     }
 
@@ -173,7 +166,7 @@ impl AudioAction {
                 audio_view(
                     &resolved,
                     settings,
-                    snap.volume_cap,
+                    snap.caps.volume_cap,
                     &recorders_for(&resolved, snap),
                 )
             }
@@ -197,7 +190,7 @@ impl AudioAction {
         loop {
             tokio::select! {
                 changed = changes.changed(), if subscribed => {
-                    // The subscriber gave up (pactl missing); only kicks remain.
+                    // The subscriber gave up (backend tool missing); only kicks remain.
                     subscribed = changed.is_ok();
                     if !subscribed {
                         continue;
@@ -233,7 +226,7 @@ impl AudioAction {
     /// Waits (up to `IN_FLIGHT_WAIT`) for the job in flight, then drops the
     /// queued jobs except re-mutes (a queued unmute would reopen the mic)
     /// and runs the mutes here, without touching the deck. A job still
-    /// running after the wait (a slow `pactl`) doesn't stop the mutes.
+    /// running after the wait (a slow backend) doesn't stop the mutes.
     /// Returns how many held controls it tried to re-mute.
     pub async fn remute_held(&self) -> usize {
         let _running = match tokio::time::timeout(IN_FLIGHT_WAIT, self.shared.running.lock()).await
@@ -311,7 +304,7 @@ impl AudioAction {
     }
 
     /// Carries `op` out against the cached snapshot and updates the cache
-    /// to match, so the next tick needs no `pactl` read.
+    /// to match, so the next tick needs no backend read.
     async fn execute(&self, settings: &AudioSettings, op: &Operation) -> Result<(), String> {
         let snap = self.current().await?;
         let resolved = resolve(settings.target, &settings.target_name, &snap);
@@ -549,6 +542,7 @@ impl Action for AudioAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::backend::BackendError;
     use crate::audio::fake::FakeBackend;
     use crate::audio::model::test_support::fixture_snapshot;
     use crate::audio::settings::GestureSetting;
@@ -1108,6 +1102,7 @@ mod tests {
 
     #[test]
     fn missing_pactl_gets_a_readable_message() {
-        assert_eq!(short_error(&BackendError::NotInstalled), "pactl not found");
+        let e = BackendError::NotInstalled("pactl");
+        assert_eq!(e.short(), "pactl not found");
     }
 }
