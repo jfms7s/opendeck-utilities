@@ -765,6 +765,68 @@ mod tests {
         assert_eq!(r.ui.alerts(), 1);
     }
 
+    fn all_inputs_rig() -> Rig {
+        let r = rig();
+        {
+            let mut snap = r.backend.snapshot.lock().unwrap();
+            for d in &mut snap.sources {
+                d.muted = false;
+            }
+            let mut other = snap.sources[0].clone();
+            other.index = 71;
+            other.name = "alsa_input.pci-analog-stereo".into();
+            snap.sources.push(other);
+        }
+        r
+    }
+
+    fn all_inputs() -> AudioSettings {
+        AudioSettings {
+            target: crate::audio::target::TargetKind::AllInputs,
+            ..AudioSettings::default()
+        }
+    }
+
+    /// A mute that lands on the first mic and fails on the second alerts
+    /// and re-reads, so the control shows the half-muted truth.
+    #[tokio::test]
+    async fn an_all_inputs_mute_that_fails_part_way_alerts_and_rereads() {
+        let r = all_inputs_rig();
+        let c = Control::key("k");
+        r.action.refresh().await;
+        r.backend.snapshot.lock().unwrap().sources[0].muted = true;
+        r.backend.fail("mute", 1);
+        r.action.press_up(&c, &all_inputs());
+        r.action.drain().await;
+        assert_eq!(r.ui.alerts(), 1);
+        assert_eq!(
+            *r.action.shared.snapshot.read().await,
+            Ok(r.backend.snapshot.lock().unwrap().clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn push_to_talk_on_all_inputs_opens_and_closes_every_mic() {
+        let r = all_inputs_rig();
+        let c = Control::key("k");
+        let s = AudioSettings {
+            press: ptt_mic().press,
+            ..all_inputs()
+        };
+        r.action.press_down(&c, &s);
+        r.action.press_up(&c, &s);
+        r.action.drain().await;
+        assert_eq!(
+            r.backend.calls(),
+            vec![
+                format!("mute Source({MIC:?}) Off"),
+                r#"mute Source("alsa_input.pci-analog-stereo") Off"#.to_string(),
+                format!("mute Source({MIC:?}) On"),
+                r#"mute Source("alsa_input.pci-analog-stereo") On"#.to_string(),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn refresh_caches_the_snapshot() {
         let r = rig();

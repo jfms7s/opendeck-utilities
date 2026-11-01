@@ -2,10 +2,10 @@
 
 use super::backend::{AudioBackend, BackendError, Mute, Node};
 use super::gesture::Operation;
-use super::model::{DeviceKind, Snapshot, Stream};
+use super::model::{Device, DeviceKind, Snapshot, Stream};
 use super::ops::{adjust_volume, cycle_candidates};
 use super::settings::AudioSettings;
-use super::target::Resolved;
+use super::target::{Resolved, all_muted};
 use crate::cycle::step_in;
 
 /// `max_volume`, but never above what the audio system accepts.
@@ -32,6 +32,9 @@ pub async fn execute(
             execute_on_device(backend, snap, *kind, &node, device.volume, settings, op).await
         }
         Resolved::App { streams } => execute_on_app(backend, snap, streams, settings, op).await,
+        Resolved::Inputs { devices, default } => {
+            execute_on_inputs(backend, snap, devices, default, settings, op).await
+        }
         Resolved::Unavailable { .. } | Resolved::NotPlaying { .. } => Err(BackendError::NoTarget),
     }
 }
@@ -120,6 +123,37 @@ async fn execute_on_app(
     }
 }
 
+/// Mute acts on every input; volume and device switching act on the
+/// default one, exactly like a "Default input" target.
+async fn execute_on_inputs(
+    backend: &dyn AudioBackend,
+    snap: &Snapshot,
+    devices: &[Device],
+    default: &Device,
+    settings: &AudioSettings,
+    op: &Operation,
+) -> Result<(), BackendError> {
+    match op {
+        // One explicit state for all, never a per-device flip: a mixed
+        // state mutes everything (only "all muted" unmutes).
+        Operation::ToggleMute => set_devices_mute(backend, devices, !all_muted(devices)).await,
+        Operation::SetMute(m) => set_devices_mute(backend, devices, *m).await,
+        _ => {
+            let node = Node::Source(default.name.clone());
+            execute_on_device(
+                backend,
+                snap,
+                DeviceKind::Input,
+                &node,
+                default.volume,
+                settings,
+                op,
+            )
+            .await
+        }
+    }
+}
+
 /// What `op` leaves a level at, given its current `volume` and `muted`;
 /// `None` for operations that switch devices instead. Mirrors the
 /// arithmetic `execute` sends to the backend.
@@ -185,6 +219,27 @@ pub fn apply_locally(
             }
             true
         }
+        Resolved::Inputs { devices, default } => {
+            let muted = match op {
+                Operation::ToggleMute => !all_muted(devices),
+                Operation::SetMute(m) => *m,
+                _ => {
+                    let as_device = Resolved::Device {
+                        kind: DeviceKind::Input,
+                        device: default.clone(),
+                    };
+                    return apply_locally(snap, &as_device, settings, op);
+                }
+            };
+            for d in snap
+                .sources
+                .iter_mut()
+                .filter(|d| devices.iter().any(|x| x.name == d.name))
+            {
+                d.muted = muted;
+            }
+            true
+        }
         Resolved::Unavailable { .. } | Resolved::NotPlaying { .. } => true,
     }
 }
@@ -197,6 +252,22 @@ async fn set_all_mute(
     let mute = if muted { Mute::On } else { Mute::Off };
     for s in streams {
         backend.set_mute(&Node::SinkInput(s.index), mute).await?;
+    }
+    Ok(())
+}
+
+/// Stops at the first failure, like the stream loops: the caller alerts
+/// and re-reads, so a partly muted state shows as such.
+async fn set_devices_mute(
+    backend: &dyn AudioBackend,
+    devices: &[Device],
+    muted: bool,
+) -> Result<(), BackendError> {
+    let mute = if muted { Mute::On } else { Mute::Off };
+    for d in devices {
+        backend
+            .set_mute(&Node::Source(d.name.clone()), mute)
+            .await?;
     }
     Ok(())
 }
@@ -494,5 +565,98 @@ mod tests {
         .await;
         r.unwrap();
         assert!(calls.is_empty());
+    }
+
+    const WEBCAM: &str = "alsa_input.usb-webcam-02.mono-fallback";
+    const ANALOG: &str = "alsa_input.pci-analog-stereo";
+
+    /// The fixture's webcam mic (muted, default) plus a live analog mic.
+    fn two_inputs() -> Snapshot {
+        let mut snap = fixture_snapshot();
+        let mut other = snap.sources[0].clone();
+        other.index = 71;
+        other.name = ANALOG.into();
+        other.muted = false;
+        snap.sources.push(other);
+        snap
+    }
+
+    async fn run_inputs(
+        snap: &Snapshot,
+        op: Operation,
+    ) -> (Result<(), BackendError>, Vec<String>, Snapshot) {
+        let fake = FakeBackend::new(snap.clone());
+        let resolved = resolve(TargetKind::AllInputs, "", snap);
+        let settings = AudioSettings::default();
+        let result = execute(&fake, snap, &resolved, &settings, &op).await;
+        let mut after = snap.clone();
+        // Device switching can't be predicted (false): the caller re-reads.
+        let predicted = result.is_ok() && apply_locally(&mut after, &resolved, &settings, &op);
+        assert_eq!(
+            predicted,
+            result.is_ok() && !matches!(op, Operation::CycleDevice(_))
+        );
+        (result, fake.calls(), after)
+    }
+
+    #[tokio::test]
+    async fn toggling_mixed_inputs_mutes_every_one() {
+        let (r, calls, after) = run_inputs(&two_inputs(), Operation::ToggleMute).await;
+        r.unwrap();
+        assert_eq!(
+            calls,
+            vec![
+                format!("mute Source({WEBCAM:?}) On"),
+                format!("mute Source({ANALOG:?}) On"),
+            ]
+        );
+        assert!(after.sources.iter().all(|d| d.muted));
+    }
+
+    #[tokio::test]
+    async fn toggling_all_muted_inputs_unmutes_every_one() {
+        let mut snap = two_inputs();
+        snap.sources.iter_mut().for_each(|d| d.muted = true);
+        let (_, calls, after) = run_inputs(&snap, Operation::ToggleMute).await;
+        assert_eq!(
+            calls,
+            vec![
+                format!("mute Source({WEBCAM:?}) Off"),
+                format!("mute Source({ANALOG:?}) Off"),
+            ]
+        );
+        assert!(after.sources.iter().all(|d| !d.muted));
+    }
+
+    #[tokio::test]
+    async fn a_failure_on_one_input_stops_and_reports_it() {
+        let snap = two_inputs();
+        let fake = FakeBackend::new(snap.clone());
+        fake.fail("mute", 1);
+        let resolved = resolve(TargetKind::AllInputs, "", &snap);
+        let r = execute(
+            &fake,
+            &snap,
+            &resolved,
+            &AudioSettings::default(),
+            &Operation::SetMute(true),
+        )
+        .await;
+        assert!(r.is_err());
+        assert_eq!(fake.calls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn volume_and_switching_act_on_the_default_input_only() {
+        let (_, calls, after) = run_inputs(&two_inputs(), Operation::AdjustVolume(5)).await;
+        let webcam = after.sources.iter().find(|d| d.name == WEBCAM).unwrap();
+        assert_eq!(
+            calls,
+            vec![format!("volume Source({WEBCAM:?}) {}", webcam.volume)]
+        );
+        let analog = after.sources.iter().find(|d| d.name == ANALOG).unwrap();
+        assert_eq!(analog.volume, two_inputs().sources[1].volume);
+        let (_, calls, _) = run_inputs(&two_inputs(), Operation::CycleDevice(1)).await;
+        assert_eq!(calls, vec![format!("default Input {ANALOG}")]);
     }
 }

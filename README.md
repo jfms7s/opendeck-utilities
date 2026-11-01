@@ -4,7 +4,10 @@ An [OpenDeck](https://github.com/nekename/OpenDeck) plugin with three
 customizable actions for keys and dials:
 
 - **Audio** - volume, mute and device switching for the default output, the
-  default input (mic), a specific device, or an application's streams.
+  default input (mic), a specific device, an application's streams, or all
+  inputs at once ("All inputs": mute and push-to-talk act on every mic, volume
+  and switching on the default one; it reads as muted only when every mic is,
+  and shows "1/2 live" when some are not).
   Every gesture is configurable (rotate, press, long-press ≥ ½ s, touch-strip
   tap): toggle mute, volume up/down, set volume, switch to the next device,
   switch to a specific device, push-to-talk. The key or touch strip shows a
@@ -106,6 +109,10 @@ maintainer's project notes (kept outside this repository), which the release not
       toggles its mute. With Press set to "Push to talk (hold)", holding the dial
       unmutes the mic and releasing mutes it again; switching profile while holding it
       also mutes it again.
+- [ ] With two mics, a control set to "All inputs" mutes both on one press
+      (`pactl list short sources` shows every non-monitor source muted, the strip
+      shows "muted"); unmuting one in a terminal makes it show "1/2 live"; the next
+      press mutes both again.
 
 **Device Brightness** (dial)
 

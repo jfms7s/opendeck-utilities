@@ -21,6 +21,7 @@
 					<option value="output">Specific output device</option>
 					<option value="input">Specific input device</option>
 					<option value="app">Application</option>
+					<option value="all_inputs">All inputs / every mic (mute all at once)</option>
 				</select>
 			</div>
 			<div id="target_name_row" class="field hidden">
@@ -207,7 +208,7 @@
 		}
 
 		function isInputTarget() {
-			return ["default_input", "input"].includes(byId("target").value);
+			return ["default_input", "input", "all_inputs"].includes(byId("target").value);
 		}
 
 		function fillOptions(list, items) {

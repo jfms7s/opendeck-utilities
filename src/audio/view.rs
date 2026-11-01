@@ -2,7 +2,7 @@
 
 use super::model::DeviceKind;
 use super::settings::{AudioSettings, DEFAULT_ACCENT};
-use super::target::{Resolved, TargetKind};
+use super::target::{Resolved, TargetKind, all_muted};
 use crate::render::icons::Icon;
 use crate::render::level::{INACTIVE_COLOR, LevelView, MUTED_COLOR};
 use crate::render::text::{sanitize_color, shorten};
@@ -24,7 +24,7 @@ fn initial(label: &str) -> char {
 
 fn target_icon(settings: &AudioSettings, fallback_label: &str) -> Icon {
     match settings.target {
-        TargetKind::DefaultInput | TargetKind::Input => Icon::Mic,
+        TargetKind::DefaultInput | TargetKind::Input | TargetKind::AllInputs => Icon::Mic,
         TargetKind::App => Icon::Letter(initial(fallback_label)),
         TargetKind::DefaultOutput | TargetKind::Output => Icon::Speaker,
     }
@@ -89,6 +89,17 @@ pub fn audio_view(resolved: &Resolved, settings: &AudioSettings) -> LevelView {
             ),
             None => inactive(settings, &label, "not playing"),
         },
+        Resolved::Inputs { devices, default } => {
+            // Muted only when every mic is: a half-muted set must not
+            // read as silence.
+            let muted = all_muted(devices);
+            let mut view = level(settings, &label, default.volume, muted, Icon::Mic);
+            let live = devices.iter().filter(|d| !d.muted).count();
+            if !muted && live < devices.len() {
+                view.value_text = format!("{live}/{} live", devices.len());
+            }
+            view
+        }
         Resolved::Unavailable { .. } => inactive(settings, &label, "unavailable"),
         Resolved::NotPlaying { .. } => inactive(settings, &label, "not playing"),
     }
@@ -199,5 +210,36 @@ mod tests {
             (v.title.as_str(), v.value_text.as_str()),
             ("pactl not found", "—")
         );
+    }
+
+    fn all_inputs_view(muted: [bool; 2]) -> LevelView {
+        let mut snap = fixture_snapshot();
+        let mut other = snap.sources[0].clone();
+        other.name = "alsa_input.pci-analog-stereo".into();
+        snap.sources.push(other);
+        for (d, m) in snap.sources.iter_mut().zip(muted) {
+            d.muted = m;
+        }
+        let settings = AudioSettings {
+            target: TargetKind::AllInputs,
+            ..AudioSettings::default()
+        };
+        audio_view(&resolve(settings.target, "", &snap), &settings)
+    }
+
+    #[test]
+    fn all_inputs_read_as_muted_only_when_every_one_is() {
+        let v = all_inputs_view([true, true]);
+        assert_eq!(
+            (v.title.as_str(), v.value_text.as_str(), v.struck),
+            ("All inputs", "muted", true)
+        );
+        assert_eq!(v.icon, Icon::Mic);
+        let v = all_inputs_view([true, false]);
+        assert_eq!((v.value_text.as_str(), v.struck), ("1/2 live", false));
+        assert_eq!(v.color, DEFAULT_ACCENT);
+        let v = all_inputs_view([false, false]);
+        assert!(!v.struck);
+        assert!(v.value_text.ends_with('%'), "{}", v.value_text);
     }
 }
