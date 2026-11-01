@@ -77,8 +77,10 @@ xattr -dr com.apple.quarantine ~/Library/Application\ Support/opendeck/plugins/c
 
 ## Manual smoke-test checklist
 
-Run this in a live OpenDeck + Stream Deck session (with PipeWire/PulseAudio running and
+Run this in a live OpenDeck + Stream Deck+ session (with PipeWire/PulseAudio running and
 at least two output devices), and the Mac list on a Mac, before publishing a release.
+It covers the dials the maintainer's deck uses; key modes, the App and specific-device
+targets and the display options are covered by the unit tests only.
 Record the result per item: pass, fail or **not run** (with why). Each release's draft
 notes start with this list, unticked, under an `UNVERIFIED` line: tick or annotate each
 item there, fill in the run details and delete the `UNVERIFIED` line before publishing.
@@ -88,65 +90,36 @@ maintainer's project notes (kept outside this repository), which the release not
 
 <!-- smoke-checklist:start (scripts/release-body.mjs copies everything up to the end marker into each draft release) -->
 
-**Audio**
+**Audio** (dials; one on the default output, one on the default input)
 
-- [ ] A new Audio key shows a speaker icon, the default output's name and its volume
-      as a percentage. Pressing it shows "muted" in red with the icon struck through;
-      pressing again unmutes.
-- [ ] Running `pactl set-sink-volume @DEFAULT_SINK@ 30%` in a terminal updates the key
-      to 30% without touching it.
-- [ ] On a dial, rotating changes the volume by the step (5% by default). Pressing the
-      dial and tapping the touch strip both toggle mute.
-- [ ] On a dial, holding the press for ½ s or longer and releasing switches the default
-      output to the next device (devices are ordered by their description and wrap
-      around). Holding
-      the dial while turning it changes the volume and does not switch device on release.
-- [ ] Ticking a subset under "Devices to switch between" limits switching to those devices.
-      Unplugging a ticked device and then changing the Label keeps it ticked once it is
-      plugged back in.
-- [ ] With Maximum volume at 100%, rotating up stops at 100%; at 150%, it goes past 100%.
-- [ ] Control set to "Default input / mic" shows a mic icon and follows the system's
-      default source. With Press set to "Push to talk (hold)", holding the key unmutes
-      the mic and releasing mutes it again; switching profile while holding it also
-      mutes it again.
-- [ ] Control set to "Application" offers the apps currently playing audio. A playing
-      app shows its initial letter and volume; rotating or pressing changes only that
-      app. When the app stops playing, the control shows "not playing" in grey and a
-      press flashes an alert.
-- [ ] Control set to "Specific output device" with a device that isn't present shows
-      "unavailable".
-- [ ] A gesture set to "Set volume to…" with 25 sets the volume to 25%. A gesture set
-      to "Switch to device…" with another output makes that the default output.
-- [ ] Setting a Label, changing the Accent colour and unticking "Show percent" change
-      the title, the bar colour and hide the percentage respectively.
+- [ ] Running `pactl set-sink-volume @DEFAULT_SINK@ 30%` in a terminal updates the
+      output dial's strip to 30% without touching it.
+- [ ] Rotating the output dial changes the volume by the step (5% by default).
+      Pressing the dial and tapping the touch strip both toggle mute ("muted" in red,
+      icon struck through).
+- [ ] Holding the press for ½ s or longer and releasing switches the default output to
+      the next device (ordered by description, wrapping around). Holding the dial
+      while turning it changes the volume and does not switch device on release.
+- [ ] With Maximum volume at 100%, rotating up stops at 100%; at 150%, it goes past
+      100%.
+- [ ] The input dial shows a mic icon and follows the system's default source; a press
+      toggles its mute. With Press set to "Push to talk (hold)", holding the dial
+      unmutes the mic and releasing mutes it again; switching profile while holding it
+      also mutes it again.
 
-**Device Brightness**
+**Device Brightness** (dial)
 
-- [ ] A new Device Brightness key shows a sun icon, "Brightness" and OpenDeck's current
-      brightness. Pressing it raises the brightness by the step (5%) and the Stream Deck
-      gets brighter.
-- [ ] Key press set to "Decrease by step", "Set to value" (e.g. 30) and "Toggle between
-      presets" each do that on press; toggling goes to Preset B when at Preset A,
-      otherwise to Preset A. Typing 300 into a value field saves 100, not 0.
-- [ ] On a dial, rotating steps the brightness up and down; a quick spin settles on the
-      final value. Pressing the dial or tapping the strip toggles between the presets.
+- [ ] Rotating steps the brightness up and down and the Stream Deck follows; a quick
+      spin settles on the final value. Pressing the dial or tapping the strip toggles
+      between the presets.
 - [ ] Changing the brightness in OpenDeck's own settings updates every brightness
       control within a second.
 
-**Switch Profile**
+**Switch Profile** (dial)
 
-- [ ] On a Switch Profile key, the Profile list shows the device's profiles. With none
-      picked, the key shows "—" / "set a profile" and a press flashes an alert.
-- [ ] After picking a profile, the key shows its name and "press to switch"; pressing
-      it switches the Stream Deck to that profile. A key showing the active profile has
-      a green border and "active".
-- [ ] Entering another connected device's id in "Device" makes the key switch that
-      device's profile instead.
-- [ ] On a dial, the touch strip shows "active: <profile>". Rotating highlights the next
-      or previous profile (wrapping around) with "press to switch"; pressing the dial or
+- [ ] The touch strip shows "active: <profile>". Rotating highlights the next or
+      previous profile (wrapping around) with "press to switch"; pressing the dial or
       tapping the strip switches to it.
-- [ ] Ticking profiles under "Profiles on the dial" limits the dial to those profiles,
-      in the order they were ticked.
 - [ ] Switching profile from OpenDeck's own UI updates every Switch Profile control.
 
 On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
