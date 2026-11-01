@@ -68,7 +68,20 @@ every press.
 ## Installing
 
 Download the latest `.streamDeckPlugin` from
-[Releases](https://github.com/jfms7s/opendeck-utilities/releases). Then either
+[Releases](https://github.com/jfms7s/opendeck-utilities/releases) and check it
+before anything else. Each release carries a build-provenance attestation signed
+by GitHub; with the [GitHub CLI](https://cli.github.com/), in the download folder:
+
+```bash
+gh attestation verify opendeck-utilities.streamDeckPlugin --repo jfms7s/opendeck-utilities
+```
+
+Without `gh`, check it against the release's `SHA256SUMS` file:
+`sha256sum -c SHA256SUMS` (macOS: `shasum -a 256 -c SHA256SUMS`) in the folder
+holding both files. That only catches a corrupted download: the checksum sits in
+the same release as the bundle, so whoever could replace one could replace both.
+
+Then either
 double-click it (if your file manager associates the extension with OpenDeck) or unzip it
 into OpenDeck's plugins folder and restart OpenDeck (OpenDeck only loads plugins at
 startup):
@@ -77,15 +90,12 @@ startup):
   `~/.var/app/me.amankhanna.opendeck/config/opendeck/plugins/`)
 - macOS: `~/Library/Application Support/opendeck/plugins/`
 
-Each release also has a `SHA256SUMS` file; check the download with
-`sha256sum -c SHA256SUMS` (macOS: `shasum -a 256 -c SHA256SUMS`) in the folder
-holding both files.
-
 On macOS, a bundle unzipped by hand (e.g. in Finder) is marked as downloaded and
-Gatekeeper refuses to start the binary. Clear the mark once:
+Gatekeeper refuses to start the binary. Once the download checked out, clear the
+mark on that one executable:
 
 ```bash
-xattr -dr com.apple.quarantine ~/Library/Application\ Support/opendeck/plugins/com.jfms7s.utilities.sdPlugin
+xattr -d com.apple.quarantine ~/Library/Application\ Support/opendeck/plugins/com.jfms7s.utilities.sdPlugin/opendeck-utilities-aarch64-apple-darwin
 ```
 
 ## Manual smoke-test checklist
@@ -157,6 +167,8 @@ On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
 
 - [ ] `xattr -l` on the installed `opendeck-utilities-aarch64-apple-darwin` shows no
       `com.apple.quarantine`.
+- [ ] Unzipped by hand instead: after `gh attestation verify` and the single-file
+      `xattr -d` from "Installing", the plugin starts.
 - [ ] A dial on the default output changes volume and mutes on press; the level
       follows changes made in Control Center within about a second.
 - [ ] Switching to the next output device moves the system output (Sound settings
@@ -211,7 +223,8 @@ shipped in the plugin bundle.
    (a test and `build.mjs` both fail if they differ), and merge that.
 2. Push a `vX.Y.Z` tag matching that version. The release workflow re-runs the
    checks, builds both Linux architectures and the macOS one (on a macOS runner) and
-   creates a **draft** release with the bundle and `SHA256SUMS`. The draft's notes
+   creates a **draft** release with the bundle, `SHA256SUMS` and a build-provenance
+   attestation (check it with `gh attestation verify` on the draft's bundle). The draft's notes
    start with the smoke-test checklist above, unticked, under an `UNVERIFIED` line
    (`scripts/release-body.mjs`), followed by the generated change list.
 3. Install the draft's bundle on Linux and on a Mac, run the smoke-test checklist, write
