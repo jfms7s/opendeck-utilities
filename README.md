@@ -164,8 +164,8 @@ On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
 - [ ] The Audio settings page shows "Application (not supported on macOS)" disabled.
 - [ ] Device Brightness and Switch Profile change OpenDeck and confirm without an alert.
 - [ ] From a checkout of the release tag, `cargo test --locked -- --ignored --nocapture coreaudio_round_trip`
-      passes (it writes the default output's and input's own volume back, toggles
-      mute twice and restores both); paste its output into the release notes.
+      passes (it writes the default output's and input's volume to 30 or 70 % and
+      back, toggles mute twice and restores both); paste its output into the release notes.
 
 <!-- smoke-checklist:end -->
 

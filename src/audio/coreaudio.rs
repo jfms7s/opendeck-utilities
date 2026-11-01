@@ -805,7 +805,8 @@ mod tests {
             .expect("the device is still there")
     }
 
-    /// Writes the default device's own volume back, toggles its mute twice
+    /// Writes the default device's own volume back and then another level,
+    /// toggles its mute twice
     /// and (outputs) makes it the default again, re-reading the HAL after
     /// each write. Prints what it did for the release notes.
     fn round_trip(kind: DeviceKind) {
@@ -835,6 +836,14 @@ mod tests {
                 let now = device_now(kind, &uid).volume;
                 println!("volume: wrote {} %, read back {now} %", start.volume);
                 assert!(now.abs_diff(start.volume) <= 1, "{now} vs {}", start.volume);
+                // A different level too, so the scalar conversion is proven
+                // both ways (the guard restores the start level).
+                let other = if start.volume >= 50 { 30 } else { 70 };
+                set_volume_blocking(&node, other).expect("set_volume to another level");
+                let now = device_now(kind, &uid).volume;
+                println!("volume: wrote {other} %, read back {now} %");
+                assert!(now.abs_diff(other) <= 1, "{now} vs {other}");
+                set_volume_blocking(&node, start.volume).expect("restoring the volume");
             }
             Err(BackendError::Unsupported(why)) => println!("volume: {why}"),
             Err(e) => panic!("set_volume: {e}"),
