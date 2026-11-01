@@ -231,6 +231,23 @@ fn brightness_defaults_and_bounds_match_the_plugin() {
     );
 }
 
+/// The Brightness page shows the plugin-wide schedule the plugin sends and
+/// hands edits back in the shape `Schedule::from_value` reads.
+#[test]
+fn brightness_page_reads_and_sends_the_schedule() {
+    assert!(BRIGHTNESS.contains(r#""brightnessSchedule""#));
+    assert!(BRIGHTNESS.contains(r#"event: "setSchedule""#));
+    assert!(BRIGHTNESS.contains("PI.schedulePayload("));
+    let schedule = crate::schedule::Schedule::default().to_value();
+    for key in ["time", "value"] {
+        assert!(schedule[0].get(key).is_some(), "{key}");
+        assert!(
+            BRIGHTNESS.contains(&format!("?.{key}")) || BRIGHTNESS.contains(&format!(".{key} ")),
+            "{key}"
+        );
+    }
+}
+
 #[test]
 fn profile_page_writes_the_settings_keys_and_reads_the_choices() {
     let rust = serde_json::to_value(crate::profile::ProfileSettings::default()).unwrap();

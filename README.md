@@ -21,6 +21,9 @@ customizable actions for keys and dials:
 - **Device Brightness** - dial steps brightness and press toggles between two
   presets; a strip tap toggles too, or steps down/up on the left/right half if
   chosen; holding the strip toggles. A key can increase, decrease, set or toggle.
+  An optional plugin-wide schedule (two local times, each with a brightness)
+  dims the deck at night and restores it in the morning, whatever profile is
+  shown; a change made in between is kept until the next scheduled time.
 - **Switch Profile** - a key jumps to a profile; a dial scrolls a list of
   profiles on the touch strip and switches on press. A strip tap switches to the
   highlighted profile, or goes to the previous/next one on the left/right half if
@@ -158,6 +161,10 @@ maintainer's project notes (kept outside this repository), which the release not
 - [ ] With "Touch strip tap" set to the half step, tapping the left half of the
       dial's strip lowers the brightness by the step and the right half raises it;
       holding the strip toggles between the presets.
+- [ ] A schedule time two minutes ahead (Schedule card) sets the brightness at that
+      minute, also with another profile shown; turning the dial afterwards is not
+      undone; restarting OpenDeck between the two times re-applies the earlier
+      time's value at start-up.
 
 **Switch Profile** (dial)
 

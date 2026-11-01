@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
-const { mergeSubset, clampInt, volumeLimit, applyCapabilities, brightnessPayload, audioNumbers, keepGesture } = require(
+const { mergeSubset, clampInt, volumeLimit, applyCapabilities, brightnessPayload, audioNumbers, keepGesture, schedulePayload } = require(
 	"../assets/propertyInspector/pi.js",
 );
 
@@ -133,4 +133,22 @@ test("a stored gesture equal to the default is kept as stored", () => {
 test("a stored gesture set back to the default is unset again", () => {
 	const press = AUDIO.gestures.Keypad.press;
 	assert.equal(keepGesture({ ...press, op: "none" }, { ...press }, press), undefined);
+});
+
+test("schedule rows: HH:MM kept, anything else turns the slot off; values clamped", () => {
+	const previous = [{ time: "", value: 10 }, { time: "", value: 70 }];
+	assert.deepEqual(
+		schedulePayload(
+			[
+				{ time: "23:00", value: "300" },
+				{ time: "25:00", value: "" },
+			],
+			previous,
+		),
+		[
+			{ time: "23:00", value: 100 },
+			{ time: "", value: 70 },
+		],
+	);
+	assert.deepEqual(schedulePayload([{ time: "", value: "abc" }], undefined), [{ time: "", value: 50 }]);
 });

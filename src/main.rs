@@ -10,6 +10,7 @@ mod opendeck_state;
 mod pending;
 mod profile;
 mod render;
+mod schedule;
 mod ui;
 
 #[cfg(test)]
@@ -17,11 +18,17 @@ mod pi_pages;
 
 use actions::audio::AudioAction;
 use actions::brightness::BrightnessAction;
+use actions::brightness::GlobalSettingsStore;
 use actions::profile::ProfileAction;
+use async_trait::async_trait;
 use audio::backend::AudioBackend;
 use host::{Host, OpenDeckHost};
+use openaction::global_events::{
+    DidReceiveGlobalSettingsEvent, GlobalEventHandler, set_global_event_handler,
+};
 use openaction::{OpenActionResult, register_action, run};
 use opendeck_state::OpenDeckState;
+use schedule::{Schedule, SystemClock};
 use std::sync::Arc;
 use std::time::Duration;
 use ui::{OpenDeckUi, Ui};
@@ -50,13 +57,16 @@ async fn main() -> OpenActionResult<()> {
 
     let audio = AudioAction::start(audio_backend(), ui.clone());
     register_action(audio.clone()).await;
-    register_action(BrightnessAction::start(
+    let brightness = BrightnessAction::start(
         deck_state.clone(),
         deck_changes.clone(),
         host.clone(),
         ui.clone(),
-    ))
-    .await;
+        Arc::new(SystemClock),
+        Arc::new(GlobalSettingsStore),
+    );
+    register_action(brightness.clone()).await;
+    set_global_event_handler(Box::leak(Box::new(GlobalEvents { brightness })));
     register_action(ProfileAction::start(deck_state, deck_changes, host, ui)).await;
 
     let result = tokio::select! {
@@ -75,6 +85,29 @@ async fn main() -> OpenActionResult<()> {
         Err(_) => log::warn!("push-to-talk re-mute on exit timed out"),
     }
     result
+}
+
+/// Plugin-wide settings: the brightness schedule, read once connected and
+/// whenever OpenDeck sends them.
+struct GlobalEvents {
+    brightness: BrightnessAction,
+}
+
+#[async_trait]
+impl GlobalEventHandler for GlobalEvents {
+    async fn plugin_ready(&self) -> OpenActionResult<()> {
+        openaction::get_global_settings().await
+    }
+
+    async fn did_receive_global_settings(
+        &self,
+        event: DidReceiveGlobalSettingsEvent,
+    ) -> OpenActionResult<()> {
+        self.brightness
+            .load_schedule(Schedule::from_global(&event.payload.settings))
+            .await;
+        Ok(())
+    }
 }
 
 /// How long exit waits for the push-to-talk re-mute.

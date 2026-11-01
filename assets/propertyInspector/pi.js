@@ -105,6 +105,19 @@
 		return same(stored, collected) ? stored : undefined;
 	}
 
+	/**
+	 * The brightness schedule to store from the page's two rows (`rows`:
+	 * `[{ time, value }]` as typed): a time is kept only as `HH:MM` (else
+	 * the slot is off, ""), a value is clamped to 0-100 and falls back to
+	 * the slot's `previous` value.
+	 */
+	function schedulePayload(rows, previous) {
+		return rows.map((row, i) => ({
+			time: /^([01]\d|2[0-3]):[0-5]\d$/.test(row.time || "") ? row.time : "",
+			value: clampInt(row.value, [0, 100], previous?.[i]?.value ?? 50),
+		}));
+	}
+
 	/** The JSON in `<script type="application/json" id="…">`. */
 	function readJson(id) {
 		return JSON.parse(document.getElementById(id).textContent);
@@ -114,7 +127,7 @@
 	 * Registers with the host. Handlers: `onOpen(payload)` once connected
 	 * (payload has `controller` and `settings`), `onSettings(settings)`,
 	 * `onMessage(payload)` for sendToPropertyInspector. Returns
-	 * `{ save(settings), requestChoices() }`.
+	 * `{ save(settings), requestChoices(), sendToPlugin(payload) }`.
 	 */
 	function connect({ onOpen, onSettings, onMessage }) {
 		let socket, uuid, action;
@@ -146,6 +159,7 @@
 			// Asked again once registered: the plugin's first push can arrive too early.
 			requestChoices: () =>
 				send({ event: "sendToPlugin", action, context: uuid, payload: { event: "requestChoices" } }),
+			sendToPlugin: (payload) => send({ event: "sendToPlugin", action, context: uuid, payload }),
 		};
 	}
 
@@ -157,6 +171,7 @@
 		brightnessPayload,
 		audioNumbers,
 		keepGesture,
+		schedulePayload,
 		readJson,
 		connect,
 	};
