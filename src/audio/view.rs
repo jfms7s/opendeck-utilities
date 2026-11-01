@@ -69,7 +69,24 @@ fn inactive(settings: &AudioSettings, label: &str, status: &str) -> LevelView {
     }
 }
 
-pub fn audio_view(resolved: &Resolved, settings: &AudioSettings) -> LevelView {
+/// `recorders`: the apps recording from the target's input(s)
+/// (`target::recorders_for`). While any records, the title names them in
+/// place of the label, muted or not: the point is knowing who has the mic.
+pub fn audio_view(
+    resolved: &Resolved,
+    settings: &AudioSettings,
+    recorders: &[String],
+) -> LevelView {
+    let mut view = target_view(resolved, settings);
+    match recorders {
+        [] => {}
+        [app] => view.title = shorten(&format!("● {app}"), TITLE_CHARS),
+        apps => view.title = format!("● {} apps", apps.len()),
+    }
+    view
+}
+
+fn target_view(resolved: &Resolved, settings: &AudioSettings) -> LevelView {
     let label = resolved.label();
     match resolved {
         Resolved::Device { kind, device } => {
@@ -127,6 +144,7 @@ mod tests {
         audio_view(
             &resolve(settings.target, &settings.target_name, &fixture_snapshot()),
             settings,
+            &[],
         )
     }
 
@@ -224,7 +242,7 @@ mod tests {
             target: TargetKind::AllInputs,
             ..AudioSettings::default()
         };
-        audio_view(&resolve(settings.target, "", &snap), &settings)
+        audio_view(&resolve(settings.target, "", &snap), &settings, &[])
     }
 
     #[test]
@@ -241,5 +259,69 @@ mod tests {
         let v = all_inputs_view([false, false]);
         assert!(!v.struck);
         assert!(v.value_text.ends_with('%'), "{}", v.value_text);
+    }
+
+    fn mic_view(recorders: &[&str]) -> LevelView {
+        let settings = AudioSettings {
+            target: TargetKind::DefaultInput,
+            label: "Mic".into(),
+            ..AudioSettings::default()
+        };
+        let resolved = resolve(settings.target, "", &fixture_snapshot());
+        let recorders: Vec<String> = recorders.iter().map(|s| s.to_string()).collect();
+        audio_view(&resolved, &settings, &recorders)
+    }
+
+    #[test]
+    fn a_recording_app_replaces_the_title_even_when_muted() {
+        let v = mic_view(&["Firefox"]);
+        assert_eq!(v.title, "● Firefox");
+        assert_eq!(v.value_text, "muted", "the fixture mic is muted");
+        assert!(v.struck);
+        assert_eq!(mic_view(&["Firefox", "Zoom"]).title, "● 2 apps");
+        assert_eq!(
+            mic_view(&["A very long application name"]).title,
+            shorten("● A very long application name", TITLE_CHARS)
+        );
+    }
+
+    #[test]
+    fn no_recorder_is_exactly_todays_view() {
+        let settings = AudioSettings {
+            target: TargetKind::DefaultInput,
+            label: "Mic".into(),
+            ..AudioSettings::default()
+        };
+        let resolved = resolve(settings.target, "", &fixture_snapshot());
+        assert_eq!(mic_view(&[]), target_view(&resolved, &settings));
+        assert_eq!(mic_view(&[]).title, "Mic");
+    }
+
+    /// The real wiring: a recorder on the speakers' monitor never reaches
+    /// an output control (build_snapshot drops it, recorders_for only
+    /// looks at inputs).
+    #[test]
+    fn an_output_shows_nothing_for_a_monitor_recorder() {
+        let snap = crate::audio::model::build_snapshot(
+            include_str!("fixtures/info.json"),
+            include_str!("fixtures/sinks.json"),
+            include_str!("fixtures/sources.json"),
+            include_str!("fixtures/sink_inputs.json"),
+            include_str!("fixtures/source_outputs.json"),
+        )
+        .unwrap();
+        let settings = AudioSettings::default();
+        let speakers = resolve(settings.target, "", &snap);
+        let recorders = crate::audio::target::recorders_for(&speakers, &snap);
+        assert!(recorders.is_empty());
+        assert_eq!(
+            audio_view(&speakers, &settings, &recorders).title,
+            "Razer Leviathan V2 …"
+        );
+        let mic = resolve(TargetKind::DefaultInput, "", &snap);
+        assert_eq!(
+            crate::audio::target::recorders_for(&mic, &snap),
+            vec!["Firefox", "arecord", "unknown"]
+        );
     }
 }

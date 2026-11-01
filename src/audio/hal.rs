@@ -219,6 +219,8 @@ pub fn build_snapshot(
             .filter_map(|d| d.input.as_ref().map(|c| to_device(d, c)))
             .collect(),
         streams: Vec::new(),
+        // No app names for the mic on macOS (Linux only in v1).
+        recorders: Vec::new(),
         apps_unsupported: true,
         volume_cap: Some(100),
     }
