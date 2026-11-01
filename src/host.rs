@@ -223,6 +223,8 @@ pub mod fake {
         pub sent: Mutex<Vec<Value>>,
         pub fail: AtomicBool,
         on_send: OnSend,
+        /// How long a send takes (like waiting for `opendeck` to exit).
+        delay: std::time::Duration,
     }
 
     impl FakeHost {
@@ -231,6 +233,17 @@ pub mod fake {
                 sent: Mutex::new(Vec::new()),
                 fail: AtomicBool::new(false),
                 on_send: Box::new(on_send),
+                delay: std::time::Duration::ZERO,
+            })
+        }
+
+        /// OpenDeck takes `delay` to accept each event, then does nothing.
+        pub fn slow(delay: std::time::Duration) -> Arc<Self> {
+            Arc::new(Self {
+                sent: Mutex::new(Vec::new()),
+                fail: AtomicBool::new(false),
+                on_send: Box::new(|_| {}),
+                delay,
             })
         }
 
@@ -247,6 +260,8 @@ pub mod fake {
     #[async_trait]
     impl Host for FakeHost {
         async fn send(&self, event: Value) -> Result<(), String> {
+            // `sent()` means "send finished", as for `opendeck` exiting.
+            tokio::time::sleep(self.delay).await;
             if self.fail.load(Ordering::SeqCst) {
                 return Err("opendeck not runnable".to_string());
             }
