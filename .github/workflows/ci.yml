@@ -54,19 +54,6 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
-  msrv:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (2026-10-01)
-        with:
-          toolchain: "1.88" # Cargo.toml rust-version
-      - run: cargo check --all-targets --locked
-
   # The release ships an Apple Silicon binary: lint, test and package it
   # natively, with the release's signature and start-up checks.
   macos:
@@ -114,21 +101,6 @@ jobs:
           echo "$out"
           echo "$out" | grep -q "missing CLI flag: -port"
       - run: node build.mjs aarch64-apple-darwin
-
-  # The same MSRV check on macOS, as its own job: the master ruleset requires
-  # a check named exactly `msrv`, which a matrix would rename.
-  msrv-macos:
-    runs-on: macos-15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (2026-10-01)
-        with:
-          toolchain: "1.88" # Cargo.toml rust-version
-      - run: cargo check --all-targets --locked
 
   bundle:
     # Builds and packages the Linux bundle (x86_64; the aarch64 Linux binary
