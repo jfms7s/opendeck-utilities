@@ -114,8 +114,10 @@ impl<R: Send + 'static> Dispatcher<R> {
                 None => request,
             };
             *pending = Some((merged, instance.to_string()));
+            // Bumped under the lock, so the generation the worker reads
+            // when it takes a request always counts that request.
+            slot.generation.fetch_add(1, Ordering::SeqCst);
         }
-        slot.generation.fetch_add(1, Ordering::SeqCst);
         slot.wake.notify_one();
     }
 
@@ -140,12 +142,14 @@ impl<R: Send + 'static> Dispatcher<R> {
 impl<R: Send + 'static> Inner<R> {
     async fn run(self: Arc<Self>, slot: Arc<Slot<R>>) {
         loop {
-            let (request, instance) = self.next(&slot).await;
-            self.handle(&slot, request, &instance).await;
+            let (request, instance, taken) = self.next(&slot).await;
+            self.handle(&slot, request, &instance, taken).await;
         }
     }
 
-    async fn next(&self, slot: &Slot<R>) -> (R, String) {
+    /// Waits for the next request; also returns the generation it was
+    /// taken at, so any later submit (even one during the send) overtakes it.
+    async fn next(&self, slot: &Slot<R>) -> (R, String, u64) {
         loop {
             while slot
                 .pending
@@ -167,18 +171,14 @@ impl<R: Send + 'static> Inner<R> {
                     }
                 }
             }
-            if let Some(next) = slot
-                .pending
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take()
-            {
-                return next;
+            let mut pending = slot.pending.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((request, instance)) = pending.take() {
+                return (request, instance, slot.generation.load(Ordering::SeqCst));
             }
         }
     }
 
-    async fn handle(&self, slot: &Slot<R>, request: R, instance: &str) {
+    async fn handle(&self, slot: &Slot<R>, request: R, instance: &str, taken: u64) {
         let mut changes = self.changes.clone();
         changes.borrow_and_update();
         let job = (self.build)(request);
@@ -193,8 +193,7 @@ impl<R: Send + 'static> Inner<R> {
                 format!("{why}; sent requests can't be confirmed, so failures won't show an alert")
             }),
             Confirm::Until(done) => {
-                let sent = slot.generation.load(Ordering::SeqCst);
-                let overtaken = || slot.generation.load(Ordering::SeqCst) != sent;
+                let overtaken = || slot.generation.load(Ordering::SeqCst) != taken;
                 let deadline = Instant::now() + host::CONFIRM_TIMEOUT;
                 // Stop waiting as soon as a newer request arrives: it is the
                 // one whose outcome matters now.
@@ -324,6 +323,35 @@ mod tests {
         idle().await;
         // Only the newest, which nothing overtook, may alert.
         assert_eq!(ui.events(), vec!["alert i2"]);
+    }
+
+    /// Code-quality review: a request submitted while the previous one is
+    /// still being sent overtakes it, so the older one stops waiting and
+    /// never alerts, and the newer one goes out as soon as that send ends.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_submitted_during_a_send_overtakes_it() {
+        for settle in [Duration::ZERO, Duration::from_millis(100)] {
+            let host = FakeHost::slow(Duration::from_millis(200));
+            let ui = Arc::new(FakeUi::default());
+            let d = dispatcher(
+                host.clone(),
+                ui.clone(),
+                Arc::new(AtomicBool::new(false)),
+                settle,
+            );
+            d.submit("k", "i1", 1);
+            tokio::time::sleep(settle + Duration::from_millis(100)).await;
+            assert!(host.sent().is_empty(), "the first send is still running");
+            d.submit("k", "i2", 2);
+            tokio::time::sleep(settle + Duration::from_millis(400)).await;
+            assert_eq!(
+                host.sent(),
+                vec![json!({ "value": 1 }), json!({ "value": 2 })],
+                "settle {settle:?}"
+            );
+            idle().await;
+            assert_eq!(ui.events(), vec!["alert i2"], "settle {settle:?}");
+        }
     }
 
     #[tokio::test(start_paused = true)]
