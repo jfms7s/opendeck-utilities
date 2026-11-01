@@ -57,7 +57,7 @@ fn has(id: AudioObjectID, addr: AudioObjectPropertyAddress) -> bool {
     unsafe { AudioObjectHasProperty(id, NonNull::from(&addr)) }
 }
 
-fn check(status: i32, what: &str) -> Result<(), BackendError> {
+fn os_check(status: i32, what: &str) -> Result<(), BackendError> {
     if status == 0 {
         Ok(())
     } else {
@@ -86,7 +86,7 @@ fn get<T: Copy + Default>(
             NonNull::from(&mut value).cast(),
         )
     };
-    check(status, "reading an audio property")?;
+    os_check(status, "reading an audio property")?;
     if size as usize != size_of::<T>() {
         return Err(BackendError::CoreAudio(
             "unexpected property size".to_string(),
@@ -111,7 +111,7 @@ fn set<T: Copy>(
             NonNull::from(&value).cast(),
         )
     };
-    check(status, "changing an audio property")
+    os_check(status, "changing an audio property")
 }
 
 /// A variable-size property, as 8-byte-aligned words (some contain pointers).
@@ -130,7 +130,7 @@ fn get_words(
             NonNull::from(&mut size),
         )
     };
-    check(status, "sizing an audio property")?;
+    os_check(status, "sizing an audio property")?;
     let mut words = vec![0u64; (size as usize).div_ceil(8).max(1)];
     // SAFETY: `words` holds at least `size` bytes; the HAL writes at most
     // `size` and updates it to the bytes written.
@@ -144,7 +144,7 @@ fn get_words(
             NonNull::new(words.as_mut_ptr().cast()).expect("vec pointer"),
         )
     };
-    check(status, "reading an audio property")?;
+    os_check(status, "reading an audio property")?;
     Ok((words, size as usize))
 }
 
@@ -279,12 +279,15 @@ struct Seen {
 
 impl Seen {
     fn remember_ids(&self, devices: &[HalDevice]) {
-        *self.ids.lock().expect("ids lock") = hal::ids_by_uid(devices);
+        *self.ids.lock().unwrap_or_else(|e| e.into_inner()) = hal::ids_by_uid(devices);
     }
 
     /// Records `now`; whether it differs from the last snapshot read.
     fn record(&self, now: Snapshot) -> bool {
-        hal::record(&mut self.last.lock().expect("last lock"), now)
+        hal::record(
+            &mut self.last.lock().unwrap_or_else(|e| e.into_inner()),
+            now,
+        )
     }
 }
 
@@ -310,7 +313,12 @@ fn scope_of(kind: DeviceKind) -> u32 {
 /// can go stale when devices come and go); only on a miss does it
 /// enumerate the HAL, refreshing the map.
 fn find_device(seen: &Seen, uid: &str, scope: u32) -> Result<(AudioObjectID, u32), BackendError> {
-    let cached = seen.ids.lock().expect("ids lock").get(uid).copied();
+    let cached = seen
+        .ids
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(uid)
+        .copied();
     if let Some(id) = cached
         && string(id, kAudioDevicePropertyDeviceUID).is_ok_and(|found| found == uid)
     {
@@ -332,7 +340,7 @@ fn find_device(seen: &Seen, uid: &str, scope: u32) -> Result<(AudioObjectID, u32
 }
 
 /// The device a node names (by UID) and the direction it is used in.
-fn resolve(seen: &Seen, node: &Node) -> Result<(AudioObjectID, u32, u32), BackendError> {
+fn device_for_node(seen: &Seen, node: &Node) -> Result<(AudioObjectID, u32, u32), BackendError> {
     let (uid, kind) = match node {
         Node::Sink(uid) => (uid, DeviceKind::Output),
         Node::Source(uid) => (uid, DeviceKind::Input),
@@ -344,7 +352,7 @@ fn resolve(seen: &Seen, node: &Node) -> Result<(AudioObjectID, u32, u32), Backen
 }
 
 fn set_volume_blocking(seen: &Seen, node: &Node, percent: u16) -> Result<(), BackendError> {
-    let (id, scope, count) = resolve(seen, node)?;
+    let (id, scope, count) = device_for_node(seen, node)?;
     let targets = elements(id, kAudioDevicePropertyVolumeScalar, scope, count);
     if targets.is_empty() {
         return Err(BackendError::Unsupported(NO_VOLUME.to_string()));
@@ -361,7 +369,7 @@ fn set_volume_blocking(seen: &Seen, node: &Node, percent: u16) -> Result<(), Bac
 }
 
 fn set_mute_blocking(seen: &Seen, node: &Node, mute: Mute) -> Result<(), BackendError> {
-    let (id, scope, count) = resolve(seen, node)?;
+    let (id, scope, count) = device_for_node(seen, node)?;
     let targets = elements(id, kAudioDevicePropertyMute, scope, count);
     let Some(&first) = targets.first() else {
         return Err(BackendError::Unsupported(NO_MUTE.to_string()));
@@ -494,7 +502,7 @@ fn listen(
             std::ptr::from_ref(listener).cast_mut().cast(),
         )
     };
-    check(status, "registering an audio listener")
+    os_check(status, "registering an audio listener")
 }
 
 /// The system object's device list and both defaults.
@@ -560,14 +568,19 @@ fn listen_system(listener: &'static Listener) -> Result<(), BackendError> {
 fn listen_device(id: AudioObjectID, listener: &'static Listener) -> Result<(), BackendError> {
     for a in device_addresses(id) {
         let prop = (id, a.mSelector, a.mScope, a.mElement);
-        if !listener.listened.lock().expect("listened lock").needs(prop) {
+        if !listener
+            .listened
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .needs(prop)
+        {
             continue;
         }
         listen(id, a, listener)?;
         listener
             .listened
             .lock()
-            .expect("listened lock")
+            .unwrap_or_else(|e| e.into_inner())
             .record(prop);
     }
     Ok(())
@@ -578,8 +591,13 @@ fn listen_device(id: AudioObjectID, listener: &'static Listener) -> Result<(), B
 fn listen_devices(listener: &'static Listener) -> Result<(), BackendError> {
     let ids = device_ids()?;
     let pending = {
-        let mut listened = listener.listened.lock().expect("listened lock");
-        for id in listener.recheck.lock().expect("recheck lock").drain(..) {
+        let mut listened = listener.listened.lock().unwrap_or_else(|e| e.into_inner());
+        for id in listener
+            .recheck
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
             listened.forget(id);
         }
         listened.new_devices(&ids)
@@ -587,7 +605,11 @@ fn listen_devices(listener: &'static Listener) -> Result<(), BackendError> {
     let mut result = Ok(());
     for id in pending {
         if let Err(e) = listen_device(id, listener) {
-            listener.listened.lock().expect("listened lock").forget(id);
+            listener
+                .listened
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .forget(id);
             result = Err(e);
         }
     }
@@ -616,7 +638,7 @@ impl CoreAudioBackend {
             if let Some(l) = self.listener.get() {
                 l.writes.fetch_add(1, Ordering::SeqCst);
             }
-            if let Some(tx) = self.tick.lock().expect("tick lock").as_ref() {
+            if let Some(tx) = self.tick.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 tx.send_modify(|n| *n = n.wrapping_add(1));
             }
         }
@@ -663,7 +685,7 @@ impl AudioBackend for CoreAudioBackend {
     /// a state nobody has read yet (`Seen::record`). Stops when every
     /// receiver is gone.
     fn subscribe(&self, tx: watch::Sender<u64>) {
-        *self.tick.lock().expect("tick lock") = Some(tx.clone());
+        *self.tick.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx.clone());
         let listener = *self.listener.get_or_init(|| Listener::leak(tx.clone()));
         let state = self.seen.clone();
         tokio::spawn(async move {
