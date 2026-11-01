@@ -11,7 +11,10 @@ customizable actions for keys and dials:
   Every gesture is configurable (rotate, press, long-press ≥ ½ s, touch-strip
   tap, touch-strip hold): toggle mute, volume up/down, set volume, switch to the
   next device, switch to a specific device, push-to-talk (press only), and for
-  the strip tap "left half: volume down · right half: up". The key or touch strip shows a
+  the strip tap "left half: volume down · right half: up". A push-to-talk
+  control still held when OpenDeck quits or stops the plugin (SIGTERM/SIGINT)
+  re-mutes before the plugin exits, given about a second; a plugin that is
+  killed outright (SIGKILL) can't, and the mic stays as it was. The key or touch strip shows a
   live level, mute state and label, and follows changes made elsewhere. On a
   mic control, the title shows "● <app>" (or "● 2 apps") while an application
   is recording from that mic, muted or not (Linux only).

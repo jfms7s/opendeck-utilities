@@ -23,6 +23,7 @@ use host::{Host, OpenDeckHost};
 use openaction::{OpenActionResult, register_action, run};
 use opendeck_state::OpenDeckState;
 use std::sync::Arc;
+use std::time::Duration;
 use ui::{OpenDeckUi, Ui};
 
 // Two workers are plenty for a handful of controls (performance review);
@@ -47,7 +48,8 @@ async fn main() -> OpenActionResult<()> {
     let deck_state = OpenDeckState::discover();
     let deck_changes = opendeck_state::spawn_watcher(deck_state.clone());
 
-    register_action(AudioAction::start(audio_backend(), ui.clone())).await;
+    let audio = AudioAction::start(audio_backend(), ui.clone());
+    register_action(audio.clone()).await;
     register_action(BrightnessAction::start(
         deck_state.clone(),
         deck_changes.clone(),
@@ -57,7 +59,52 @@ async fn main() -> OpenActionResult<()> {
     .await;
     register_action(ProfileAction::start(deck_state, deck_changes, host, ui)).await;
 
-    run(std::env::args().collect()).await
+    let result = tokio::select! {
+        result = run(std::env::args().collect()) => result,
+        signal = shutdown_signal() => {
+            log::info!("{signal}: exiting");
+            Ok(())
+        }
+    };
+    // OpenDeck quit or stopped the plugin: a held push-to-talk control
+    // gets no key-up, so close the mic before the process goes. SIGKILL
+    // can't be caught; nothing covers that.
+    match tokio::time::timeout(REMUTE_TIMEOUT, audio.remute_held()).await {
+        Ok(0) => {}
+        Ok(n) => log::info!("re-muted {n} held push-to-talk control(s) on exit"),
+        Err(_) => log::warn!("push-to-talk re-mute on exit timed out"),
+    }
+    result
+}
+
+/// How long exit waits for the push-to-talk re-mute.
+const REMUTE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Resolves on SIGTERM or SIGINT, naming which; never if neither handler
+/// can be installed.
+async fn shutdown_signal() -> &'static str {
+    use tokio::signal::unix::{SignalKind, signal};
+    let term = async {
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                term.recv().await;
+            }
+            Err(e) => {
+                log::warn!("can't watch for SIGTERM: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    let int = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            log::warn!("can't watch for SIGINT: {e}");
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::select! {
+        () = term => "SIGTERM",
+        () = int => "SIGINT",
+    }
 }
 
 #[cfg(test)]

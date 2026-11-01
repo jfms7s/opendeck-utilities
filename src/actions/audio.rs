@@ -15,11 +15,15 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{Notify, RwLock, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, RwLock, watch};
 
 /// Coalesces a burst of `pactl subscribe` events (one dial turn can emit
 /// several) into one refresh.
 pub const DEBOUNCE: Duration = Duration::from_millis(50);
+
+/// How long the exit re-mute waits for the job in flight before going
+/// ahead (the caller bounds the whole re-mute at about 1 s).
+const IN_FLIGHT_WAIT: Duration = Duration::from_millis(300);
 
 /// One operation waiting for the worker.
 struct Job {
@@ -86,6 +90,9 @@ struct Shared {
     /// long "hold + turn" never fires the long-press operation.
     consumed: DashSet<String>,
     queue: Queue,
+    /// Held by the worker while it takes and runs a job, so the exit
+    /// re-mute never races a job in flight.
+    running: AsyncMutex<()>,
 }
 
 #[derive(Clone)]
@@ -125,6 +132,7 @@ impl AudioAction {
                 pressed: DashMap::new(),
                 consumed: DashSet::new(),
                 queue: Queue::default(),
+                running: AsyncMutex::new(()),
             }),
         }
     }
@@ -205,11 +213,50 @@ impl AudioAction {
 
     async fn run_jobs(self) {
         loop {
-            match self.shared.queue.pop() {
-                Some(job) => self.run_job(job).await,
-                None => self.shared.queue.ready.notified().await,
+            let running = self.shared.running.lock().await;
+            if let Some(job) = self.shared.queue.pop() {
+                self.run_job(job).await;
+                continue;
+            }
+            drop(running);
+            self.shared.queue.ready.notified().await;
+        }
+    }
+
+    /// Re-mutes every push-to-talk control still held, for when the plugin
+    /// exits (OpenDeck quit or SIGTERM): no key-up or disappear follows.
+    /// Waits (up to `IN_FLIGHT_WAIT`) for the job in flight, then drops the
+    /// queued jobs except re-mutes (a queued unmute would reopen the mic)
+    /// and runs the mutes here, without touching the deck. A job still
+    /// running after the wait (a slow `pactl`) doesn't stop the mutes.
+    /// Returns how many held controls it tried to re-mute.
+    pub async fn remute_held(&self) -> usize {
+        let _running = match tokio::time::timeout(IN_FLIGHT_WAIT, self.shared.running.lock()).await
+        {
+            Ok(guard) => Some(guard),
+            Err(_) => {
+                log::warn!("an audio job is still running; re-muting anyway");
+                None
+            }
+        };
+        let mut mutes: Vec<(AudioSettings, Operation)> =
+            std::iter::from_fn(|| self.shared.queue.pop())
+                .filter(|job| job.must)
+                .map(|job| (job.settings, job.op))
+                .collect();
+        let mut held = 0;
+        for (control, settings) in self.shared.instances.snapshot() {
+            let e = gesture::effective(&settings, control.controller);
+            if e.press.op == OpKind::PushToTalk && self.is_held(&control.id) {
+                mutes.push((settings, Operation::SetMute(true)));
+                held += 1;
             }
         }
+        for (settings, op) in &mutes {
+            // Failures are logged by `execute_job`.
+            let _ = self.execute_job(settings, op, true).await;
+        }
+        held
     }
 
     /// Runs every queued job now (tests drive the worker this way).
@@ -227,11 +274,27 @@ impl AudioAction {
             op,
             must,
         } = job;
-        let mut result = self.execute(&settings, &op).await;
-        if result.is_err() && must {
-            // Push-to-talk must not leave the mic live: re-read and retry.
+        if let Err(e) = self.execute_job(&settings, &op, must).await {
+            log::warn!("audio {op:?} failed: {e}");
+            self.shared.ui.alert(&control.id).await;
+            // Show what actually happened (e.g. half of an app's streams).
             self.refresh().await;
-            result = self.execute(&settings, &op).await;
+        }
+        self.render_all().await;
+    }
+
+    /// Runs `op`; a `must` one (push-to-talk's re-mute) that fails is
+    /// retried once on a fresh read, since failing leaves the mic live.
+    async fn execute_job(
+        &self,
+        settings: &AudioSettings,
+        op: &Operation,
+        must: bool,
+    ) -> Result<(), String> {
+        let mut result = self.execute(settings, op).await;
+        if result.is_err() && must {
+            self.refresh().await;
+            result = self.execute(settings, op).await;
             if let Err(e) = &result {
                 log::error!(
                     "push-to-talk could not mute {:?} again: {e}",
@@ -239,13 +302,7 @@ impl AudioAction {
                 );
             }
         }
-        if let Err(e) = result {
-            log::warn!("audio {op:?} failed: {e}");
-            self.shared.ui.alert(&control.id).await;
-            // Show what actually happened (e.g. half of an app's streams).
-            self.refresh().await;
-        }
-        self.render_all().await;
+        result
     }
 
     /// Carries `op` out against the cached snapshot and updates the cache
@@ -736,6 +793,83 @@ mod tests {
             ]
         );
         assert_eq!(r.ui.alerts(), 0);
+    }
+
+    /// Plugin exit: a held push-to-talk key and a held-and-turned dial
+    /// re-mute; a released one and a held non-push-to-talk control don't.
+    #[tokio::test]
+    async fn exit_remutes_only_held_push_to_talk_controls() {
+        let r = rig();
+        let (key, dial, released, plain) = (
+            Control::key("key"),
+            Control::dial("dial"),
+            Control::key("released"),
+            Control::key("plain"),
+        );
+        let ptt = ptt_mic();
+        for c in [&key, &dial, &released] {
+            r.action.appear(c, &ptt).await;
+        }
+        r.action.appear(&plain, &AudioSettings::default()).await;
+        r.action.press_down(&key, &ptt);
+        r.action.press_down(&dial, &ptt);
+        r.action.rotate(&dial, &ptt, 1, true);
+        r.action.press_down(&released, &ptt);
+        r.action.press_up(&released, &ptt);
+        r.action.press_down(&plain, &AudioSettings::default());
+        r.action.drain().await;
+        let before = r.backend.calls().len();
+        assert_eq!(r.action.remute_held().await, 2);
+        assert_eq!(
+            r.backend.calls()[before..],
+            [
+                format!("mute Source({MIC:?}) On"),
+                format!("mute Source({MIC:?}) On"),
+            ]
+        );
+        assert_eq!(r.ui.alerts(), 0);
+    }
+
+    /// Plugin exit with the unmute still queued: it is dropped, not run
+    /// after the re-mute, and a queued re-mute (control gone) still runs.
+    #[tokio::test]
+    async fn exit_drops_a_queued_unmute_and_keeps_queued_remutes() {
+        let r = rig();
+        let (key, gone) = (Control::key("key"), Control::key("gone"));
+        let ptt = ptt_mic();
+        r.action.appear(&key, &ptt).await;
+        r.action.appear(&gone, &ptt).await;
+        r.action.press_down(&gone, &ptt);
+        r.action.disappear(&gone, &ptt);
+        r.action.press_down(&key, &ptt);
+        assert_eq!(r.action.remute_held().await, 1);
+        assert_eq!(
+            r.backend.calls(),
+            vec![
+                format!("mute Source({MIC:?}) On"),
+                format!("mute Source({MIC:?}) On"),
+            ]
+        );
+        r.action.drain().await;
+        assert_eq!(r.backend.calls().len(), 2, "nothing left to run");
+    }
+
+    /// Review: a job stuck in flight (slow `pactl`) must not stop the exit
+    /// re-mute from being sent.
+    #[tokio::test(start_paused = true)]
+    async fn exit_remutes_even_while_a_job_is_stuck() {
+        let r = rig();
+        let key = Control::key("key");
+        let ptt = ptt_mic();
+        r.action.appear(&key, &ptt).await;
+        r.action.press_down(&key, &ptt);
+        r.action.drain().await;
+        let _stuck = r.action.shared.running.lock().await;
+        assert_eq!(r.action.remute_held().await, 1);
+        assert_eq!(
+            r.backend.calls().last().unwrap(),
+            &format!("mute Source({MIC:?}) On")
+        );
     }
 
     /// QA mutation M12: the retry re-reads the audio system first, so it
