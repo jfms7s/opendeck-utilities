@@ -28,7 +28,7 @@ customizable actions for keys and dials:
 
 ## Requirements
 
-**Linux** (x86_64 or aarch64):
+**Linux** (x86_64):
 
 - PipeWire (or PulseAudio) and `pactl` 16 or newer on `PATH`
   (the plugin reads `pactl -f json` output, added in version 16).
@@ -222,7 +222,7 @@ shipped in the plugin bundle.
 1. Bump `version` in `Cargo.toml` and `Version` in `assets/manifest.json` together
    (a test and `build.mjs` both fail if they differ), and merge that.
 2. Push a `vX.Y.Z` tag matching that version. The release workflow re-runs the
-   checks, builds both Linux architectures and the macOS one (on a macOS runner) and
+   checks, builds the Linux x86_64 binary and the macOS one (on a macOS runner) and
    creates a **draft** release with the bundle, `SHA256SUMS` and a build-provenance
    attestation (check it with `gh attestation verify` on the draft's bundle). The draft's notes
    start with the smoke-test checklist above, unticked, under an `UNVERIFIED` line

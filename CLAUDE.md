@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 OpenDeck plugin (`com.jfms7s.utilities`, Rust on the `openaction` crate; Linux
-x86_64/aarch64 and Apple Silicon macOS) with three actions: Audio (`pactl` on Linux,
+x86_64 and Apple Silicon macOS) with three actions: Audio (`pactl` on Linux,
 CoreAudio on macOS), Device Brightness and Switch Profile (`opendeck
 --process-message`). Design docs, plans, reviews and issue write-ups live in the
 Obsidian vault at `~/git/obsidian-vault/personal/projects/opendeck-utilities/`, not
