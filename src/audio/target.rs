@@ -69,6 +69,26 @@ pub fn all_muted(devices: &[Device]) -> bool {
     devices.iter().all(|d| d.muted)
 }
 
+/// The apps recording from the input(s) a control acts on, each named
+/// once, in snapshot order. Empty for outputs, apps and missing targets.
+pub fn recorders_for(resolved: &Resolved, snap: &Snapshot) -> Vec<String> {
+    let on = |index: u32| match resolved {
+        Resolved::Device {
+            kind: DeviceKind::Input,
+            device,
+        } => device.index == index,
+        Resolved::Inputs { devices, .. } => devices.iter().any(|d| d.index == index),
+        _ => false,
+    };
+    let mut apps: Vec<String> = Vec::new();
+    for r in snap.recorders.iter().filter(|r| on(r.source)) {
+        if !apps.contains(&r.app) {
+            apps.push(r.app.clone());
+        }
+    }
+    apps
+}
+
 pub fn app_matches(stream: &Stream, name: &str) -> bool {
     stream.binary.eq_ignore_ascii_case(name) || stream.app_name.eq_ignore_ascii_case(name)
 }
@@ -337,5 +357,29 @@ mod tests {
         let k: TargetKind = serde_json::from_str("\"all_inputs\"").unwrap();
         assert_eq!(k, TargetKind::AllInputs);
         assert_eq!(serde_json::to_string(&k).unwrap(), "\"all_inputs\"");
+    }
+
+    fn recording(snap: &mut Snapshot, source: u32, app: &str) {
+        snap.recorders.push(crate::audio::model::Recorder {
+            source,
+            app: app.into(),
+        });
+    }
+
+    #[test]
+    fn recorders_are_named_once_and_only_for_inputs() {
+        let mut snap = two_inputs();
+        recording(&mut snap, 70, "Firefox");
+        recording(&mut snap, 70, "Firefox");
+        recording(&mut snap, 71, "Zoom");
+        recording(&mut snap, 61, "OBS Studio");
+        let mic = resolve(TargetKind::DefaultInput, "", &snap);
+        assert_eq!(recorders_for(&mic, &snap), vec!["Firefox"]);
+        let all = resolve(TargetKind::AllInputs, "", &snap);
+        assert_eq!(recorders_for(&all, &snap), vec!["Firefox", "Zoom"]);
+        let speakers = resolve(TargetKind::DefaultOutput, "", &snap);
+        assert!(recorders_for(&speakers, &snap).is_empty());
+        let app = resolve(TargetKind::App, "chrome", &snap);
+        assert!(recorders_for(&app, &snap).is_empty());
     }
 }

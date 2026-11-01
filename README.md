@@ -11,7 +11,9 @@ customizable actions for keys and dials:
   Every gesture is configurable (rotate, press, long-press ≥ ½ s, touch-strip
   tap): toggle mute, volume up/down, set volume, switch to the next device,
   switch to a specific device, push-to-talk. The key or touch strip shows a
-  live level, mute state and label, and follows changes made elsewhere.
+  live level, mute state and label, and follows changes made elsewhere. On a
+  mic control, the title shows "● <app>" (or "● 2 apps") while an application
+  is recording from that mic, muted or not (Linux only).
 - **Device Brightness** - dial steps brightness and press toggles between two
   presets; a key can increase, decrease, set or toggle.
 - **Switch Profile** - a key jumps to a profile; a dial scrolls a list of
@@ -33,7 +35,8 @@ customizable actions for keys and dials:
 - Nothing to install: audio goes through CoreAudio, and OpenDeck's config is read
   from `~/Library/Application Support/opendeck`.
 - Not available on macOS: the **Application** audio target (macOS has no public
-  API for another app's volume or output device) and volumes above 100 %.
+  API for another app's volume or output device), volumes above 100 %, and the
+  "● <app>" recording hint on mic controls.
 - OpenDeck's config changes are picked up as they are written (kqueue, as Linux
   uses inotify), with a 30 s re-check as a safety net.
 
@@ -109,6 +112,9 @@ maintainer's project notes (kept outside this repository), which the release not
       toggles its mute. With Press set to "Push to talk (hold)", holding the dial
       unmutes the mic and releasing mutes it again; switching profile while holding it
       also mutes it again.
+- [ ] Opening a mic test page in a browser makes the input dial's title read
+      "● <browser>" within a second, also while muted; closing the tab clears it.
+      Opening Plasma's volume applet (or pavucontrol) on its input tab does not.
 - [ ] With two mics, a control set to "All inputs" mutes both on one press
       (`pactl list short sources` shows every non-monitor source muted, the strip
       shows "muted"); unmuting one in a terminal makes it show "1/2 live"; the next

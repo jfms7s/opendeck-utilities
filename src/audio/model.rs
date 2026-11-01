@@ -34,6 +34,15 @@ pub struct Stream {
     pub muted: bool,
 }
 
+/// An application with a microphone open (a pactl "source-output").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recorder {
+    /// Index of the source (input device) it records from.
+    pub source: u32,
+    /// `application.name`, else the process binary, else "unknown".
+    pub app: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub default_sink: String,
@@ -42,6 +51,9 @@ pub struct Snapshot {
     /// Inputs only - monitor sources are excluded.
     pub sources: Vec<Device>,
     pub streams: Vec<Stream>,
+    /// Apps recording from an input; never a monitor source or a level
+    /// meter's peak-detect stream. Always empty on macOS.
+    pub recorders: Vec<Recorder>,
     /// The audio system has no per-app streams (CoreAudio on macOS), so App
     /// targets can't work at all - not just "not playing" right now.
     pub apps_unsupported: bool,
@@ -97,6 +109,13 @@ struct RawStream {
     mute: bool,
     #[serde(default)]
     volume: HashMap<String, RawChannel>,
+    #[serde(default)]
+    properties: HashMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct RawRecorder {
+    source: u32,
     #[serde(default)]
     properties: HashMap<String, Value>,
 }
@@ -164,22 +183,68 @@ fn parse_streams(json: &str) -> Result<Vec<Stream>, ParseError> {
         .collect())
 }
 
+/// Level meters (pavucontrol, Plasma's volume applet) open peak-detect
+/// streams on the mic while their window is open; pipewire-pulse marks
+/// them `stream.monitor = "true"`. They are not recording.
+fn is_peak_detect(properties: &HashMap<String, Value>) -> bool {
+    match properties.get("stream.monitor") {
+        Some(Value::String(v)) => v == "true",
+        Some(Value::Bool(v)) => *v,
+        _ => false,
+    }
+}
+
+/// Recorders on any source except `monitors`, without peak-detect streams.
+fn parse_recorders(json: &str, monitors: &[u32]) -> Result<Vec<Recorder>, ParseError> {
+    let raw: Vec<RawRecorder> = serde_json::from_str(json)?;
+    Ok(raw
+        .into_iter()
+        .filter(|r| !monitors.contains(&r.source) && !is_peak_detect(&r.properties))
+        .map(|r| {
+            let app = [
+                prop(&r.properties, "application.name"),
+                prop(&r.properties, "application.process.binary"),
+            ]
+            .into_iter()
+            .find(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
+            Recorder {
+                source: r.source,
+                app,
+            }
+        })
+        .collect())
+}
+
 pub fn is_monitor(name: &str) -> bool {
     name.ends_with(".monitor")
 }
 
-/// Combines the four `pactl -f json` outputs (`info`, `list sinks`,
-/// `list sources`, `list sink-inputs`) into one snapshot. Unparseable
-/// server info or device lists are an error; unparseable streams are not.
+/// Combines the five `pactl -f json` outputs (`info`, `list sinks`,
+/// `list sources`, `list sink-inputs`, `list source-outputs`) into one
+/// snapshot. Unparseable server info or device lists are an error;
+/// unparseable streams or recorders are not.
 pub fn build_snapshot(
     info: &str,
     sinks: &str,
     sources: &str,
     sink_inputs: &str,
+    source_outputs: &str,
 ) -> Result<Snapshot, ParseError> {
     let info: RawInfo = serde_json::from_str(info)?;
     let mut sources = parse_devices(sources)?;
+    // Recorders name their source by index; collect the monitors' before
+    // they are dropped, or a recording of the speakers reads as the mic.
+    let monitors: Vec<u32> = sources
+        .iter()
+        .filter(|d| is_monitor(&d.name))
+        .map(|d| d.index)
+        .collect();
     sources.retain(|d| !is_monitor(&d.name));
+    let recorders = parse_recorders(source_outputs, &monitors).unwrap_or_else(|e| {
+        log::warn!("ignoring unparseable recorders: {e}");
+        Vec::new()
+    });
     // One odd app stream must not blank the device controls: streams only
     // matter to App controls, which then show "not playing".
     let streams = parse_streams(sink_inputs).unwrap_or_else(|e| {
@@ -192,6 +257,7 @@ pub fn build_snapshot(
         sinks: parse_devices(sinks)?,
         sources,
         streams,
+        recorders,
         apps_unsupported: false,
         volume_cap: None,
     })
@@ -207,6 +273,7 @@ pub(crate) mod test_support {
             include_str!("fixtures/sinks.json"),
             include_str!("fixtures/sources.json"),
             include_str!("fixtures/sink_inputs.json"),
+            "[]",
         )
         .unwrap()
     }
@@ -269,9 +336,9 @@ mod tests {
 
     #[test]
     fn malformed_info_or_devices_is_an_error() {
-        assert!(build_snapshot("{", "[]", "[]", "[]").is_err());
-        assert!(build_snapshot("{}", "not json", "[]", "[]").is_err());
-        assert!(build_snapshot("{}", "[]", "not json", "[]").is_err());
+        assert!(build_snapshot("{", "[]", "[]", "[]", "[]").is_err());
+        assert!(build_snapshot("{}", "not json", "[]", "[]", "[]").is_err());
+        assert!(build_snapshot("{}", "[]", "not json", "[]", "[]").is_err());
     }
 
     #[test]
@@ -281,10 +348,12 @@ mod tests {
             include_str!("fixtures/sinks.json"),
             include_str!("fixtures/sources.json"),
             r#"[{"index": "not a number"}]"#,
+            r#"[{"source": "not a number"}]"#,
         )
         .unwrap();
         assert_eq!(s.sinks.len(), 2);
         assert!(s.streams.is_empty());
+        assert!(s.recorders.is_empty());
     }
 
     /// Real `pactl -f json` output (pactl 17.0, PipeWire 1.6.9), scrubbed of
@@ -298,6 +367,7 @@ mod tests {
             include_str!("fixtures/pactl-17/sinks.json"),
             include_str!("fixtures/pactl-17/sources.json"),
             include_str!("fixtures/pactl-17/sink_inputs.json"),
+            include_str!("fixtures/pactl-17/source_outputs.json"),
         )
         .unwrap();
         assert_eq!(s.sinks.len(), 4);
@@ -307,5 +377,43 @@ mod tests {
         let default = s.sinks.iter().find(|d| d.name == s.default_sink).unwrap();
         assert_eq!(default.description, "Razer Leviathan V2 Analog Stereo");
         assert!(s.sources.iter().any(|d| d.name == s.default_source));
+        // Hand-written in pactl 17's shape (no live recorder was captured):
+        // Firefox on the webcam counts; Plasma's peak detect and OBS on a
+        // monitor don't; a paused (corked) nameless arecord still has the
+        // analog mic open and counts under its binary.
+        assert_eq!(
+            s.recorders,
+            vec![
+                Recorder {
+                    source: 10536,
+                    app: "Firefox".into()
+                },
+                Recorder {
+                    source: 68,
+                    app: "arecord".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recorders_skip_monitors_and_peak_detect_and_fall_back_to_the_binary() {
+        let s = build_snapshot(
+            include_str!("fixtures/info.json"),
+            include_str!("fixtures/sinks.json"),
+            include_str!("fixtures/sources.json"),
+            include_str!("fixtures/sink_inputs.json"),
+            include_str!("fixtures/source_outputs.json"),
+        )
+        .unwrap();
+        let apps: Vec<(u32, &str)> = s
+            .recorders
+            .iter()
+            .map(|r| (r.source, r.app.as_str()))
+            .collect();
+        assert_eq!(
+            apps,
+            vec![(70, "Firefox"), (70, "arecord"), (70, "unknown")]
+        );
     }
 }

@@ -229,19 +229,21 @@ impl PactlBackend {
 #[async_trait]
 impl AudioBackend for PactlBackend {
     async fn snapshot(&self) -> Result<Snapshot, BackendError> {
-        let (info, sinks, sources, inputs) = tokio::join!(
+        let (info, sinks, sources, inputs, outputs) = tokio::join!(
             Self::json(&["info"]),
             Self::json(&["list", "sinks"]),
             Self::json(&["list", "sources"]),
             Self::json(&["list", "sink-inputs"]),
+            Self::json(&["list", "source-outputs"]),
         );
         // Streams only matter to App controls; failing to list them must
         // not blank every device control too.
-        let inputs = inputs.unwrap_or_else(|e| {
-            log::warn!("listing app streams failed: {e}");
-            "[]".to_string()
-        });
-        Ok(model::build_snapshot(&info?, &sinks?, &sources?, &inputs)?)
+        let inputs = or_empty(inputs, "app streams");
+        // Likewise recorders only add the "app is recording" hint.
+        let outputs = or_empty(outputs, "recorders");
+        Ok(model::build_snapshot(
+            &info?, &sinks?, &sources?, &inputs, &outputs,
+        )?)
     }
 
     async fn set_volume(&self, node: &Node, percent: u16) -> Result<(), BackendError> {
@@ -269,15 +271,27 @@ impl AudioBackend for PactlBackend {
     }
 }
 
-/// `pactl subscribe` prints e.g. `Event 'change' on sink #60`. Only
-/// devices, app streams and the server (default-device changes) matter;
-/// clients and source-outputs (apps opening the mic) are noise.
+/// A list only some controls need degrades to empty instead of failing the
+/// whole snapshot.
+fn or_empty(list: Result<String, BackendError>, what: &str) -> String {
+    list.unwrap_or_else(|e| {
+        log::warn!("listing {what} failed: {e}");
+        "[]".to_string()
+    })
+}
+
+/// `pactl subscribe` prints e.g. `Event 'change' on sink #60`. Devices, app
+/// streams, recorders (apps opening the mic) and the server (default-device
+/// changes) matter; clients are noise.
 pub fn is_relevant_event(line: &str) -> bool {
     let Some((_, rest)) = line.split_once(" on ") else {
         return false;
     };
     let facility = rest.split(" #").next().unwrap_or_default().trim();
-    matches!(facility, "sink" | "source" | "sink-input" | "server")
+    matches!(
+        facility,
+        "sink" | "source" | "sink-input" | "source-output" | "server"
+    )
 }
 
 /// A missing `pactl` will not appear by retrying (spec §7).
@@ -354,6 +368,18 @@ mod tests {
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A failing `list source-outputs` (or `sink-inputs`) must not blank
+    /// the device controls: the snapshot is built with an empty list.
+    #[test]
+    fn a_failed_optional_list_reads_as_empty() {
+        let failed = Err(BackendError::Failed {
+            args: "list source-outputs".into(),
+            stderr: "boom".into(),
+        });
+        assert_eq!(or_empty(failed, "recorders"), "[]");
+        assert_eq!(or_empty(Ok("[1]".into()), "recorders"), "[1]");
     }
 
     #[test]
@@ -473,7 +499,7 @@ mod tests {
         assert!(is_relevant_event("Event 'new' on sink-input #12"));
         assert!(is_relevant_event("Event 'change' on source #70"));
         assert!(is_relevant_event("Event 'change' on server #-1"));
-        assert!(!is_relevant_event("Event 'new' on source-output #5"));
+        assert!(is_relevant_event("Event 'new' on source-output #5"));
         assert!(!is_relevant_event("Event 'change' on client #90"));
         assert!(!is_relevant_event("garbage"));
     }

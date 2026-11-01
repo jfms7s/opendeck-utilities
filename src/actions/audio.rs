@@ -5,7 +5,7 @@ use crate::audio::gesture::{self, Operation};
 use crate::audio::model::Snapshot;
 use crate::audio::pi::choices;
 use crate::audio::settings::{AudioSettings, OpKind};
-use crate::audio::target::resolve;
+use crate::audio::target::{recorders_for, resolve};
 use crate::audio::view::{audio_view, error_view};
 use crate::ui::Ui;
 use async_trait::async_trait;
@@ -160,10 +160,10 @@ impl AudioAction {
 
     async fn render(&self, control: &Control, settings: &AudioSettings) {
         let view = match &*self.shared.snapshot.read().await {
-            Ok(snap) => audio_view(
-                &resolve(settings.target, &settings.target_name, snap),
-                settings,
-            ),
+            Ok(snap) => {
+                let resolved = resolve(settings.target, &settings.target_name, snap);
+                audio_view(&resolved, settings, &recorders_for(&resolved, snap))
+            }
             Err(message) => error_view(settings, message),
         };
         self.shared.ui.show_level(control, &view).await;
