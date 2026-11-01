@@ -170,7 +170,12 @@ impl AudioAction {
         let view = match &*self.shared.snapshot.read().await {
             Ok(snap) => {
                 let resolved = resolve(settings.target, &settings.target_name, snap);
-                audio_view(&resolved, settings, &recorders_for(&resolved, snap))
+                audio_view(
+                    &resolved,
+                    settings,
+                    snap.volume_cap,
+                    &recorders_for(&resolved, snap),
+                )
             }
             Err(message) => error_view(settings, message),
         };

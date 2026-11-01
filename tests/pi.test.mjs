@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { mergeSubset, clampInt } = require("../assets/propertyInspector/pi.js");
+const { mergeSubset, clampInt, volumeLimit } = require("../assets/propertyInspector/pi.js");
 
 test("a stored name with no checkbox survives an unrelated save", () => {
 	// Headset H is unplugged, so only A and B are listed; the user edits the label.
@@ -31,4 +31,11 @@ test("numbers clamp into range and blanks fall back to the default", () => {
 	assert.equal(clampInt("0", [0, 100], 50), 0);
 	assert.equal(clampInt("", [0, 100], 50), 50);
 	assert.equal(clampInt("abc", [1, 20], 5), 5);
+});
+
+test("a volume cap lowers the offered maximum; no cap leaves it", () => {
+	assert.equal(volumeLimit(100, 150), 100);
+	assert.equal(volumeLimit(null, 150), 150);
+	assert.equal(volumeLimit(undefined, 150), 150);
+	assert.equal(volumeLimit(200, 150), 150);
 });

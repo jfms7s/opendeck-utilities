@@ -8,11 +8,6 @@ use super::settings::AudioSettings;
 use super::target::{Resolved, all_muted};
 use crate::cycle::step_in;
 
-/// `max_volume`, but never above what the audio system accepts.
-fn effective_max(settings: &AudioSettings, cap: Option<u16>) -> u16 {
-    settings.max_volume().min(cap.unwrap_or(u16::MAX))
-}
-
 pub async fn execute(
     backend: &dyn AudioBackend,
     snap: &Snapshot,
@@ -48,7 +43,7 @@ async fn execute_on_device(
     settings: &AudioSettings,
     op: &Operation,
 ) -> Result<(), BackendError> {
-    let max = effective_max(settings, snap.volume_cap);
+    let max = settings.effective_max(snap.volume_cap);
     match op {
         Operation::None => Ok(()),
         Operation::ToggleMute => backend.set_mute(node, Mute::Toggle).await,
@@ -91,7 +86,7 @@ async fn execute_on_app(
     let Some(first) = streams.first() else {
         return Err(BackendError::NoTarget);
     };
-    let max = effective_max(settings, snap.volume_cap);
+    let max = settings.effective_max(snap.volume_cap);
     match op {
         Operation::None => Ok(()),
         // Streams are set to one explicit state rather than each toggled,
@@ -164,7 +159,7 @@ fn predicted(
     cap: Option<u16>,
     op: &Operation,
 ) -> Option<(u16, bool)> {
-    let max = effective_max(settings, cap);
+    let max = settings.effective_max(cap);
     match op {
         Operation::None => Some((volume, muted)),
         Operation::ToggleMute => Some((volume, !muted)),
