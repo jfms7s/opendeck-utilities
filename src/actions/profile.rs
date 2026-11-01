@@ -5,7 +5,9 @@ use crate::dispatch::{self, Confirm, Dispatcher, Job};
 use crate::host::{self, Host};
 use crate::opendeck_state::{OpenDeckState, is_safe_device_id};
 use crate::pending::Pending;
-use crate::profile::{ProfileSettings, cycle_list, dial_view, key_view, target_device};
+use crate::profile::{
+    ProfileSettings, TapAction, cycle_list, dial_view, key_view, tap_action, target_device,
+};
 use crate::ui::Ui;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -221,7 +223,13 @@ impl ProfileAction {
         self.send_choices(control, settings).await;
     }
 
-    async fn rotate(&self, control: &Control, settings: &ProfileSettings, ticks: i16) {
+    /// The dial's profile list and the profile it currently points at
+    /// (its highlight, else the active profile).
+    fn dial_position(
+        &self,
+        control: &Control,
+        settings: &ProfileSettings,
+    ) -> (Vec<String>, String) {
         let device = target_device(settings, &control.device);
         let list = cycle_list(&self.shared.state.profiles(&device), &settings.cycle);
         let current = self
@@ -231,8 +239,30 @@ impl ProfileAction {
             .map(|h| h.clone())
             .or_else(|| self.active_profile(&device))
             .unwrap_or_default();
+        (list, current)
+    }
+
+    async fn rotate(&self, control: &Control, settings: &ProfileSettings, ticks: i16) {
+        let (list, current) = self.dial_position(control, settings);
         if let Some(next) = step_in(&list, &current, i64::from(ticks)) {
             self.shared.highlighted.insert(control.id.clone(), next);
+        }
+        self.render(control, settings).await;
+    }
+
+    async fn tap(&self, control: &Control, settings: &ProfileSettings, x: u16, hold: bool) {
+        let target = match tap_action(settings, x, hold) {
+            TapAction::CommitHighlight => return self.commit_highlight(control, settings).await,
+            TapAction::Step(by) => {
+                let (list, current) = self.dial_position(control, settings);
+                step_in(&list, &current, by)
+            }
+            TapAction::Home => self.dial_position(control, settings).0.into_iter().next(),
+        };
+        self.shared.highlighted.remove(&control.id);
+        match target {
+            Some(profile) => self.switch_to(control, settings, &profile).await,
+            None => self.shared.ui.alert(&control.id).await,
         }
         self.render(control, settings).await;
     }
@@ -306,10 +336,10 @@ impl Action for ProfileAction {
         &self,
         instance: &Instance,
         settings: &ProfileSettings,
-        _position: (u16, u16),
-        _hold: bool,
+        position: (u16, u16),
+        hold: bool,
     ) -> OpenActionResult<()> {
-        self.commit_highlight(&Control::of(instance), settings)
+        self.tap(&Control::of(instance), settings, position.0, hold)
             .await;
         Ok(())
     }
@@ -494,6 +524,50 @@ mod tests {
         idle().await;
         assert_eq!(r.host.sent()[0]["profile"], "claude");
         assert_eq!(r.ui.alerts(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn half_taps_switch_at_once_and_a_hold_goes_to_the_first_profile() {
+        let r = rig(true);
+        let c = Control::dial("d");
+        let s = ProfileSettings {
+            strip_tap: crate::profile::StripTap::HalfStep,
+            cycle: vec!["gaming".into(), "claude".into(), "Default".into()],
+            ..ProfileSettings::default()
+        };
+        r.action.appear(&c, &s).await;
+        r.action.tap(&c, &s, 150, false).await;
+        idle().await;
+        assert_eq!(
+            r.host.sent()[0]["profile"],
+            "gaming",
+            "Default → next wraps"
+        );
+        r.action.tap(&c, &s, 20, false).await;
+        idle().await;
+        assert_eq!(r.host.sent()[1]["profile"], "Default", "gaming → previous");
+        r.action.rotate(&c, &s, 1).await;
+        r.action.tap(&c, &s, 20, true).await;
+        idle().await;
+        assert_eq!(
+            r.host.sent()[2]["profile"],
+            "gaming",
+            "hold = first in the list"
+        );
+        assert!(r.action.shared.highlighted.is_empty());
+        assert_eq!(r.ui.alerts(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_default_strip_tap_still_commits_the_highlight() {
+        let r = rig(true);
+        let c = Control::dial("d");
+        let s = ProfileSettings::default();
+        r.action.appear(&c, &s).await;
+        r.action.rotate(&c, &s, 1).await;
+        r.action.tap(&c, &s, 20, false).await;
+        idle().await;
+        assert_eq!(r.host.sent()[0]["profile"], "claude");
     }
 
     /// Code-quality review: a highlight from the old device must not be

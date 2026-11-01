@@ -59,7 +59,9 @@ options or key modes without lifting the freeze here first (owner decision). Not
 is cut for being unplaced: the plugin is public.
 
 - Audio gesture matrix (`src/audio/settings.rs` slots/operations, `audio.html`
-  gestures). Exception: the touch-strip hold slot and half taps (owner-approved).
+  gestures): four slots (press, long press, strip tap, strip hold) since the
+  owner-approved strip hold and half taps landed; the strip tap modes of
+  Brightness and Switch Profile likewise.
 - Audio targets (`src/audio/target.rs`): output, input, specific device, App.
   Exception: "All inputs" (owner-approved), the last new target.
 - Operations and settings no placed control uses (volume up/down, set volume, switch

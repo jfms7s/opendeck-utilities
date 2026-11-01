@@ -3,6 +3,7 @@
 
 use super::settings::{AudioSettings, GestureSetting, OpKind, RotateKind};
 pub use crate::controller::Controller;
+use crate::controller::{Half, strip_half};
 use std::time::Duration;
 
 pub const LONG_PRESS: Duration = Duration::from_millis(500);
@@ -23,6 +24,7 @@ pub struct Effective {
     pub press: GestureSetting,
     pub long_press: GestureSetting,
     pub touch_tap: GestureSetting,
+    pub touch_hold: GestureSetting,
 }
 
 fn op(op: OpKind) -> GestureSetting {
@@ -34,9 +36,16 @@ fn op(op: OpKind) -> GestureSetting {
 
 /// Fills unset gestures with the controller's defaults (spec §6.2).
 pub fn effective(settings: &AudioSettings, controller: Controller) -> Effective {
-    let (press, long_press, touch_tap) = match controller {
-        Controller::Keypad => (OpKind::ToggleMute, OpKind::None, OpKind::None),
-        Controller::Encoder => (OpKind::ToggleMute, OpKind::CycleDevice, OpKind::ToggleMute),
+    // A long touch used to reach the plugin as a plain tap, so on a dial
+    // the hold slot defaults to the tap's default (toggle mute).
+    let (press, long_press, touch_tap, touch_hold) = match controller {
+        Controller::Keypad => (OpKind::ToggleMute, OpKind::None, OpKind::None, OpKind::None),
+        Controller::Encoder => (
+            OpKind::ToggleMute,
+            OpKind::CycleDevice,
+            OpKind::ToggleMute,
+            OpKind::ToggleMute,
+        ),
     };
     Effective {
         press: settings.press.clone().unwrap_or_else(|| op(press)),
@@ -45,15 +54,23 @@ pub fn effective(settings: &AudioSettings, controller: Controller) -> Effective 
             .clone()
             .unwrap_or_else(|| op(long_press)),
         touch_tap: settings.touch_tap.clone().unwrap_or_else(|| op(touch_tap)),
+        // The strip has no release (no push-to-talk) and a hold has no
+        // position (no half step): either falls back to the default.
+        touch_hold: settings
+            .touch_hold
+            .clone()
+            .filter(|g| !matches!(g.op, OpKind::PushToTalk | OpKind::HalfStep))
+            .unwrap_or_else(|| op(touch_hold)),
     }
 }
 
 /// Push-to-talk is not a one-shot operation; it is handled by
-/// `down_operation`/`release_operation` and maps to `None` here.
+/// `down_operation`/`release_operation` and maps to `None` here, as does
+/// a half step outside `tap_operation`.
 pub fn gesture_operation(gesture: &GestureSetting, step: u16) -> Operation {
     let step = i32::from(step);
     match gesture.op {
-        OpKind::None | OpKind::PushToTalk => Operation::None,
+        OpKind::None | OpKind::PushToTalk | OpKind::HalfStep => Operation::None,
         OpKind::ToggleMute => Operation::ToggleMute,
         OpKind::VolumeUp => Operation::AdjustVolume(step),
         OpKind::VolumeDown => Operation::AdjustVolume(-step),
@@ -61,6 +78,21 @@ pub fn gesture_operation(gesture: &GestureSetting, step: u16) -> Operation {
         OpKind::CycleDevice => Operation::CycleDevice(1),
         OpKind::SetDefaultDevice => Operation::SetDefaultDevice(gesture.device.trim().to_string()),
     }
+}
+
+/// A touch-strip tap at segment-relative `x`, or a long touch (`hold`).
+pub fn tap_operation(e: &Effective, x: u16, hold: bool, step: u16) -> Operation {
+    if hold {
+        return gesture_operation(&e.touch_hold, step);
+    }
+    if e.touch_tap.op == OpKind::HalfStep {
+        let step = i32::from(step);
+        return Operation::AdjustVolume(match strip_half(x) {
+            Half::Left => -step,
+            Half::Right => step,
+        });
+    }
+    gesture_operation(&e.touch_tap, step)
 }
 
 pub fn rotate_operation(kind: RotateKind, ticks: i16, step: u16) -> Operation {
@@ -114,10 +146,16 @@ mod tests {
             (k.press.op, k.long_press.op, k.touch_tap.op),
             (OpKind::ToggleMute, OpKind::None, OpKind::None)
         );
+        assert_eq!(k.touch_hold.op, OpKind::None);
         let d = eff(Controller::Encoder);
         assert_eq!(
-            (d.press.op, d.long_press.op, d.touch_tap.op),
-            (OpKind::ToggleMute, OpKind::CycleDevice, OpKind::ToggleMute)
+            (d.press.op, d.long_press.op, d.touch_tap.op, d.touch_hold.op),
+            (
+                OpKind::ToggleMute,
+                OpKind::CycleDevice,
+                OpKind::ToggleMute,
+                OpKind::ToggleMute
+            )
         );
     }
 
@@ -233,5 +271,56 @@ mod tests {
         );
         assert_eq!(rotate_operation(RotateKind::Volume, 0, 5), Operation::None);
         assert_eq!(rotate_operation(RotateKind::None, 2, 5), Operation::None);
+    }
+
+    #[test]
+    fn a_hold_runs_the_touch_hold_slot_and_defaults_to_the_tap() {
+        let e = eff(Controller::Encoder);
+        assert_eq!(tap_operation(&e, 20, true, 5), Operation::ToggleMute);
+        let s = AudioSettings {
+            touch_hold: Some(op(OpKind::CycleDevice)),
+            ..AudioSettings::default()
+        };
+        let e = effective(&s, Controller::Encoder);
+        assert_eq!(tap_operation(&e, 20, true, 5), Operation::CycleDevice(1));
+        assert_eq!(tap_operation(&e, 20, false, 5), Operation::ToggleMute);
+    }
+
+    #[test]
+    fn push_to_talk_or_half_step_never_reach_the_hold_slot() {
+        for bad in [OpKind::PushToTalk, OpKind::HalfStep] {
+            let s = AudioSettings {
+                touch_hold: Some(op(bad)),
+                ..AudioSettings::default()
+            };
+            let e = effective(&s, Controller::Encoder);
+            assert_eq!(e.touch_hold.op, OpKind::ToggleMute, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn half_step_taps_step_down_left_and_up_right() {
+        let s = AudioSettings {
+            touch_tap: Some(op(OpKind::HalfStep)),
+            ..AudioSettings::default()
+        };
+        let e = effective(&s, Controller::Encoder);
+        assert_eq!(tap_operation(&e, 10, false, 5), Operation::AdjustVolume(-5));
+        assert_eq!(tap_operation(&e, 99, false, 5), Operation::AdjustVolume(-5));
+        assert_eq!(tap_operation(&e, 100, false, 5), Operation::AdjustVolume(5));
+        assert_eq!(tap_operation(&e, 199, false, 5), Operation::AdjustVolume(5));
+        assert_eq!(
+            tap_operation(&e, 10, true, 5),
+            Operation::ToggleMute,
+            "a hold ignores halves"
+        );
+    }
+
+    #[test]
+    fn a_configured_tap_ignores_the_position() {
+        let e = eff(Controller::Encoder);
+        assert_eq!(tap_operation(&e, 0, false, 5), Operation::ToggleMute);
+        assert_eq!(tap_operation(&e, 199, false, 5), Operation::ToggleMute);
+        assert_eq!(gesture_operation(&op(OpKind::HalfStep), 5), Operation::None);
     }
 }

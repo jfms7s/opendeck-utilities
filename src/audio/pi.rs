@@ -42,7 +42,12 @@ pub fn choices(
         "inputs": devices(&snap.sources),
         "apps": apps,
         "appsSupported": !snap.apps_unsupported,
-        "effective": { "press": e.press, "long_press": e.long_press, "touch_tap": e.touch_tap },
+        "effective": {
+            "press": e.press,
+            "long_press": e.long_press,
+            "touch_tap": e.touch_tap,
+            "touch_hold": e.touch_hold,
+        },
         "error": error,
     })
 }

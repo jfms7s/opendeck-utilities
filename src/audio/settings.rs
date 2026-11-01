@@ -17,6 +17,8 @@ pub enum OpKind {
     CycleDevice,
     SetDefaultDevice,
     PushToTalk,
+    /// Touch-strip tap only: left half volume down, right half up.
+    HalfStep,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -77,6 +79,8 @@ pub struct AudioSettings {
     pub press: Option<GestureSetting>,
     pub long_press: Option<GestureSetting>,
     pub touch_tap: Option<GestureSetting>,
+    /// A long touch on the strip (dials only).
+    pub touch_hold: Option<GestureSetting>,
     /// Device node names to cycle through; empty = all.
     pub cycle_devices: Vec<String>,
     pub label: String,
@@ -95,6 +99,7 @@ impl Default for AudioSettings {
             press: None,
             long_press: None,
             touch_tap: None,
+            touch_hold: None,
             cycle_devices: Vec::new(),
             label: String::new(),
             accent: DEFAULT_ACCENT.to_string(),
@@ -115,6 +120,7 @@ impl<'de> Deserialize<'de> for AudioSettings {
         f.read("press", &mut s.press);
         f.read("long_press", &mut s.long_press);
         f.read("touch_tap", &mut s.touch_tap);
+        f.read("touch_hold", &mut s.touch_hold);
         f.read("cycle_devices", &mut s.cycle_devices);
         f.read("label", &mut s.label);
         f.read("accent", &mut s.accent);
@@ -223,5 +229,19 @@ mod tests {
         };
         assert_eq!(s.step(), 20);
         assert_eq!(s.max_volume(), 150);
+    }
+
+    #[test]
+    fn settings_without_touch_hold_read_as_before() {
+        let s: AudioSettings =
+            serde_json::from_value(json!({ "touch_tap": { "op": "toggle_mute" } })).unwrap();
+        assert_eq!(s.touch_hold, None);
+        let s: AudioSettings = serde_json::from_value(json!({
+            "touch_hold": { "op": "volume_up" },
+            "touch_tap": { "op": "half_step" }
+        }))
+        .unwrap();
+        assert_eq!(s.touch_hold.unwrap().op, OpKind::VolumeUp);
+        assert_eq!(s.touch_tap.unwrap().op, OpKind::HalfStep);
     }
 }

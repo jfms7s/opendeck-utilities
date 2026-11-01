@@ -40,6 +40,18 @@
 			<p class="hint">Pressing the dial toggles between them.</p>
 		</section>
 
+		<section class="card" id="dial_only">
+			<h2>Touch strip</h2>
+			<div class="field">
+				<label for="strip_tap">Tap</label>
+				<select id="strip_tap">
+					<option value="toggle_presets">Toggle between presets</option>
+					<option value="half_step">Left half: step down · right half: up</option>
+				</select>
+				<p class="hint">Holding the strip always toggles between the presets.</p>
+			</div>
+		</section>
+
 		<section class="card">
 			<h2>Step</h2>
 			<div class="field">
@@ -53,7 +65,7 @@
 	<!-- Defaults and bounds; src/pi_pages.rs checks they match the plugin. -->
 	<script type="application/json" id="defaults">
 	{
-		"settings": { "key_op": "increase", "value": 50, "step": 5, "preset_a": 0, "preset_b": 50 },
+		"settings": { "key_op": "increase", "value": 50, "step": 5, "preset_a": 0, "preset_b": 50, "strip_tap": "toggle_presets" },
 		"bounds": { "value": [0, 100], "step": [1, 50], "preset_a": [0, 100], "preset_b": [0, 100] }
 	}
 	</script>
@@ -66,6 +78,7 @@
 		const pi = PI.connect({
 			onOpen(payload) {
 				byId("key_only").classList.toggle("hidden", payload.controller !== "Keypad");
+				byId("dial_only").classList.toggle("hidden", payload.controller === "Keypad");
 				apply(payload.settings || {});
 			},
 			onSettings: apply,
@@ -76,7 +89,7 @@
 		}
 
 		function send() {
-			const payload = { key_op: byId("key_op").value };
+			const payload = { key_op: byId("key_op").value, strip_tap: byId("strip_tap").value };
 			for (const id of NUMBERS) {
 				payload[id] = PI.clampInt(byId(id).value, DEFAULTS.bounds[id], DEFAULTS.settings[id]);
 				// Show what was saved, not an out-of-range entry.

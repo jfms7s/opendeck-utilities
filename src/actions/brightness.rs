@@ -1,6 +1,6 @@
 use super::{Control, Instances};
 use crate::brightness::{
-    BrightnessSettings, Request, apply, brightness_view, key_request, rotate_request,
+    BrightnessSettings, Request, apply, brightness_view, key_request, rotate_request, tap_request,
     toggle_request,
 };
 use crate::dispatch::{Confirm, Dispatcher, Job};
@@ -195,6 +195,11 @@ impl BrightnessAction {
         self.send(control, toggle_request(self.current(), settings))
             .await;
     }
+
+    async fn tap(&self, control: &Control, settings: &BrightnessSettings, x: u16, hold: bool) {
+        self.send(control, tap_request(self.current(), settings, x, hold))
+            .await;
+    }
 }
 
 #[async_trait]
@@ -253,10 +258,11 @@ impl Action for BrightnessAction {
         &self,
         instance: &Instance,
         settings: &BrightnessSettings,
-        _position: (u16, u16),
-        _hold: bool,
+        position: (u16, u16),
+        hold: bool,
     ) -> OpenActionResult<()> {
-        self.toggle(&Control::of(instance), settings).await;
+        self.tap(&Control::of(instance), settings, position.0, hold)
+            .await;
         Ok(())
     }
 }
