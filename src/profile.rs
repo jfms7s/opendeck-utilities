@@ -1,5 +1,4 @@
 use crate::controller::{Half, strip_half};
-use crate::cycle::subset_or_all;
 use crate::lenient::Fields;
 use crate::render::profile::ProfileView;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -69,10 +68,6 @@ pub fn target_device(s: &ProfileSettings, own: &str) -> String {
     }
 }
 
-pub fn cycle_list(all: &[String], subset: &[String]) -> Vec<String> {
-    subset_or_all(all, subset)
-}
-
 pub fn key_view(active: Option<&str>, target: &str) -> ProfileView {
     let target = target.trim();
     let is_active = !target.is_empty() && active == Some(target);
@@ -115,10 +110,6 @@ pub fn dial_view(active: Option<&str>, highlighted: Option<&str>) -> ProfileView
 mod tests {
     use super::*;
 
-    fn all() -> Vec<String> {
-        ["Default", "claude", "gaming"].map(String::from).to_vec()
-    }
-
     #[test]
     fn device_defaults_to_own() {
         assert_eq!(target_device(&ProfileSettings::default(), "sd-1"), "sd-1");
@@ -127,19 +118,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(target_device(&s, "sd-1"), "sd-2");
-    }
-
-    #[test]
-    fn cycle_list_keeps_subset_order_and_drops_missing() {
-        let subset = ["gaming", "deleted", "Default"].map(String::from).to_vec();
-        assert_eq!(cycle_list(&all(), &subset), vec!["gaming", "Default"]);
-        assert_eq!(cycle_list(&all(), &[]), all());
-    }
-
-    #[test]
-    fn stale_subset_falls_back_to_all_profiles() {
-        let subset = ["renamed", "deleted"].map(String::from).to_vec();
-        assert_eq!(cycle_list(&all(), &subset), all());
     }
 
     #[test]

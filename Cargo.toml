@@ -23,6 +23,8 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # CoreAudio (HAL) bindings for the macOS audio backend; pure Rust.
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware"] }
+# Typed CFString ownership and reading for the HAL's device names and UIDs.
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFString"] }
 
 [dev-dependencies]
 tokio = { version = "1.48", features = ["test-util", "macros", "rt"] }

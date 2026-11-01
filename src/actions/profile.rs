@@ -5,9 +5,7 @@ use crate::dispatch::{self, Confirm, Dispatcher, Job};
 use crate::host::{self, Host};
 use crate::opendeck_state::{OpenDeckState, is_safe_device_id};
 use crate::pending::Pending;
-use crate::profile::{
-    ProfileSettings, TapAction, cycle_list, dial_view, key_view, tap_action, target_device,
-};
+use crate::profile::{ProfileSettings, TapAction, dial_view, key_view, tap_action, target_device};
 use crate::ui::Ui;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -231,7 +229,8 @@ impl ProfileAction {
         settings: &ProfileSettings,
     ) -> (Vec<String>, String) {
         let device = target_device(settings, &control.device);
-        let list = cycle_list(&self.shared.state.profiles(&device), &settings.cycle);
+        let list =
+            crate::cycle::subset_or_all(&self.shared.state.profiles(&device), &settings.cycle);
         let current = self
             .shared
             .highlighted

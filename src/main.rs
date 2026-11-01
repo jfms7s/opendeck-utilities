@@ -26,8 +26,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use ui::{OpenDeckUi, Ui};
 
-// Two workers are plenty for a handful of controls (performance review);
-// nothing here blocks a worker for long.
 /// CoreAudio on macOS, `pactl` (PipeWire/PulseAudio) elsewhere.
 fn audio_backend() -> Arc<dyn AudioBackend> {
     #[cfg(target_os = "macos")]
@@ -36,6 +34,8 @@ fn audio_backend() -> Arc<dyn AudioBackend> {
     return Arc::new(audio::backend::PactlBackend);
 }
 
+// Two workers are plenty for a handful of controls (performance review);
+// nothing here blocks a worker for long.
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> OpenActionResult<()> {
     simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())
@@ -116,8 +116,8 @@ mod tests {
         assert_eq!(manifest["Version"], env!("CARGO_PKG_VERSION"));
     }
 
-    /// `build.mjs` names each binary after `CodePaths`; the Linux default must
-    /// be one of them.
+    /// `build.mjs` names each binary after `CodePaths`; `CodePathLin` and
+    /// `CodePathMac` must each be one of them.
     #[test]
     fn manifest_code_paths_name_the_built_binaries() {
         let manifest: serde_json::Value =

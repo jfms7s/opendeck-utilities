@@ -1,8 +1,9 @@
 //! The data the Audio property inspector needs to offer choices.
 
-use super::gesture::{Controller, effective};
+use super::gesture::effective;
 use super::model::{Device, Snapshot};
 use super::settings::AudioSettings;
+use crate::controller::Controller;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 

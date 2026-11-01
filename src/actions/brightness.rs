@@ -12,6 +12,10 @@ use async_trait::async_trait;
 use openaction::{Action, Instance, OpenActionResult};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// The dispatcher coalescing key: OpenDeck has one brightness for every
+/// device, so every Brightness control shares one key.
+const KEY: &str = "brightness";
 use tokio::sync::watch;
 
 /// A dial spin settles into one `opendeck` launch (perf review).
@@ -166,7 +170,7 @@ impl BrightnessAction {
             }
             None => Ask::from_request(&request),
         };
-        self.shared.dispatch.submit("", &control.id, ask);
+        self.shared.dispatch.submit(KEY, &control.id, ask);
     }
 
     async fn appear(&self, control: &Control) {

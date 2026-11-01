@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
-const { mergeSubset, clampInt, volumeLimit, applyCapabilities, brightnessPayload, audioNumbers } = require(
+const { mergeSubset, clampInt, volumeLimit, applyCapabilities, brightnessPayload, audioNumbers, keepGesture } = require(
 	"../assets/propertyInspector/pi.js",
 );
 
@@ -111,4 +111,26 @@ test("audio: volumes are clamped to the bounds, lowered to the backend cap", () 
 	assert.equal(capped.gesture_volumes.press, 100);
 	// No capabilities yet: no cap.
 	assert.equal(audioNumbers(values, AUDIO).max_volume, 150);
+});
+
+test("a gesture slot left at the controller default stays unset", () => {
+	const press = AUDIO.gestures.Keypad.press;
+	assert.equal(keepGesture(undefined, { ...press }, press), undefined);
+});
+
+test("a gesture the user changed is stored", () => {
+	const press = AUDIO.gestures.Keypad.press;
+	const changed = { ...press, op: "none" };
+	assert.deepEqual(keepGesture(undefined, changed, press), changed);
+});
+
+test("a stored gesture equal to the default is kept as stored", () => {
+	const press = AUDIO.gestures.Keypad.press;
+	const stored = { ...press };
+	assert.equal(keepGesture(stored, { ...press }, press), stored);
+});
+
+test("a stored gesture set back to the default is unset again", () => {
+	const press = AUDIO.gestures.Keypad.press;
+	assert.equal(keepGesture({ ...press, op: "none" }, { ...press }, press), undefined);
 });

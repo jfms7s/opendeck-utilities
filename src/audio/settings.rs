@@ -130,10 +130,12 @@ impl<'de> Deserialize<'de> for AudioSettings {
 }
 
 impl AudioSettings {
+    /// `Deserialize` already clamps; this repeats it for values set in code.
     pub fn step(&self) -> u16 {
         self.step.clamp(*STEP.start(), *STEP.end())
     }
 
+    /// `Deserialize` already clamps; this repeats it for values set in code.
     pub fn max_volume(&self) -> u16 {
         self.max_volume
             .clamp(*MAX_VOLUME.start(), *MAX_VOLUME.end())
