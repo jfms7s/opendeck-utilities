@@ -129,6 +129,8 @@ maintainer's project notes (kept outside this repository), which the release not
       while turning it changes the volume and does not switch device on release.
 - [ ] With Maximum volume at 100%, rotating up stops at 100%; at 150%, it goes past
       100%.
+- [ ] Editing only the Label of a new dial keeps its default gestures (press toggles
+      mute, long press switches device).
 - [ ] The input dial shows a mic icon and follows the system's default source; a press
       toggles its mute. With Press set to "Push to talk (hold)", holding the dial
       unmutes the mic and releasing mutes it again; switching profile while holding it

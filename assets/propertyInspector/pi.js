@@ -92,6 +92,19 @@
 		};
 	}
 
+	/**
+	 * What to store for one gesture slot after an edit elsewhere on the page.
+	 * A slot left at the controller's default (`fallback`, what the plugin
+	 * uses for an unset slot) stays unset, so a later change of default still
+	 * reaches it; `stored` is kept when it already says the same. Anything
+	 * else the user picked is stored as `collected`.
+	 */
+	function keepGesture(stored, collected, fallback) {
+		const same = (a, b) => !!a && !!b && a.op === b.op && a.volume === b.volume && a.device === b.device;
+		if (!same(collected, fallback)) return collected;
+		return same(stored, collected) ? stored : undefined;
+	}
+
 	/** The JSON in `<script type="application/json" id="…">`. */
 	function readJson(id) {
 		return JSON.parse(document.getElementById(id).textContent);
@@ -143,6 +156,7 @@
 		applyCapabilities,
 		brightnessPayload,
 		audioNumbers,
+		keepGesture,
 		readJson,
 		connect,
 	};

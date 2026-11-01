@@ -338,11 +338,15 @@
 					if (settings[slot]) next[slot] = settings[slot];
 					continue;
 				}
-				next[slot] = {
+				const collected = {
 					op: select.value,
 					volume: numbers.gesture_volumes[slot],
 					device: field(slot, "device").value.trim(),
 				};
+				// A slot showing the controller's default stays unset.
+				const fallback = DEFAULTS.gestures[controller === "Keypad" ? "Keypad" : "Encoder"][slot];
+				const kept = PI.keepGesture(settings[slot], collected, fallback);
+				if (kept) next[slot] = kept;
 			}
 			return next;
 		}
