@@ -320,6 +320,10 @@ impl AudioAction {
             self.shared.local_writes.fetch_add(1, Ordering::SeqCst);
             predicted
         };
+        // Linux trusts the prediction (`pactl subscribe` reports the change
+        // anyway). macOS also re-reads once after each write, because a
+        // device rounds the volume to its own steps: the backend's
+        // `written` bumps the change channel for that.
         if !predicted {
             self.refresh().await;
         }
