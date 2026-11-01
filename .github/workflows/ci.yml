@@ -88,6 +88,11 @@ jobs:
       # which one the runner gave (device counts, or the error).
       - name: Show what the HAL snapshot test saw
         run: cargo test --locked coreaudio_snapshot_does_not_panic -- --nocapture
+      # The runner has virtual audio devices, so the hand-run CoreAudio round
+      # trip runs here too: real HAL writes, though not a real speaker or mic.
+      # With no default device it prints so and passes.
+      - name: CoreAudio round trip on the runner's devices
+        run: cargo test --locked coreaudio_round_trip -- --ignored --nocapture
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
