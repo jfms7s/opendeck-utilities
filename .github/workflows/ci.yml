@@ -3,6 +3,9 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Weekly advisory scan: only `audit` runs on the schedule.
+  schedule:
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
@@ -12,6 +15,7 @@ env:
 
 jobs:
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -24,6 +28,7 @@ jobs:
           toolchain: 1.98.1
           components: rustfmt, clippy, llvm-tools-preview
           targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
@@ -70,6 +75,7 @@ jobs:
   # The release ships an Apple Silicon binary: lint, test and package it
   # natively, with the release's signature and start-up checks.
   macos:
+    if: github.event_name != 'schedule'
     runs-on: macos-15
     permissions:
       contents: read
@@ -82,6 +88,7 @@ jobs:
           toolchain: 1.98.1
           components: clippy
           targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       # The snapshot test passes with or without a HAL snapshot; this shows
@@ -100,19 +107,7 @@ jobs:
         run: node --test tests/*.test.mjs
       - run: cargo build --release --locked --target aarch64-apple-darwin
       - name: Check it is a signed arm64 binary that starts
-        run: |
-          bin=target/aarch64-apple-darwin/release/opendeck-utilities
-          file "$bin"
-          # macOS's file says "executable arm64", Linux's "arm64 executable".
-          file -b "$bin" | grep -Eq '^Mach-O 64-bit (arm64 executable|executable arm64)'
-          # Apple Silicon kills unsigned binaries; the linker's ad-hoc
-          # signature must survive `strip = true`.
-          codesign --verify --verbose "$bin"
-          # Without OpenDeck's arguments it stops at the first missing flag,
-          # which proves it got as far as main().
-          out=$("$bin" 2>&1 || true)
-          echo "$out"
-          echo "$out" | grep -q "missing CLI flag: -port"
+        run: scripts/check-macos-binary.sh target/aarch64-apple-darwin/release/opendeck-utilities
       - run: node build.mjs aarch64-apple-darwin
 
   # The same MSRV check on macOS, as its own job: the master ruleset requires
@@ -133,6 +128,7 @@ jobs:
   bundle:
     # Builds and packages the Linux bundle (x86_64; the aarch64 Linux binary
     # was dropped, owner-approved), so a broken release build shows up here.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -144,6 +140,7 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo build --release --locked --target x86_64-unknown-linux-gnu
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -162,14 +159,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master (2026-10-01)
         with:
-          command: check advisories
+          toolchain: 1.98.1
+      # install-action verifies the download's checksum.
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check advisories
 
   # eng-metrics-lab (report-only): duplication, complexity and dead code; the collector picks up the artifact.
   quality:
     needs: [test]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     permissions: {contents: read, packages: read}
     steps:
