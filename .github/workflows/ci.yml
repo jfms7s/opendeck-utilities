@@ -146,6 +146,10 @@ jobs:
         with:
           node-version: 24
       - run: node build.mjs x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+      # The Release workflow builds the draft's notes this way; a README edit
+      # that breaks the smoke-checklist markers fails here, not on the tag.
+      - name: Draft release notes build from the README checklist
+        run: node scripts/release-body.mjs > /dev/null
 
   audit:
     runs-on: ubuntu-24.04
