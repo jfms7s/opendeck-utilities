@@ -613,6 +613,36 @@ mod tests {
         );
     }
 
+    /// QA mutation M9: ticks from two dials turned together are summed per
+    /// dial, never into one call with the other dial's target.
+    #[tokio::test]
+    async fn two_dials_turned_together_change_their_own_targets() {
+        const SPDIF: &str = "alsa_output.pci-0000_2f_00.4.iec958-stereo";
+        let r = rig();
+        let (d1, d2) = (Control::dial("d1"), Control::dial("d2"));
+        let s1 = AudioSettings::default();
+        let s2 = AudioSettings {
+            target: crate::audio::target::TargetKind::Output,
+            target_name: SPDIF.into(),
+            ..AudioSettings::default()
+        };
+        r.action.refresh().await;
+        for _ in 0..2 {
+            r.action.rotate(&d1, &s1, 1, false);
+            r.action.rotate(&d2, &s2, -1, false);
+        }
+        r.action.drain().await;
+        assert_eq!(
+            r.backend.calls(),
+            vec![
+                format!("volume Sink({RAZER:?}) 52"),
+                format!("volume Sink({SPDIF:?}) 95"),
+                format!("volume Sink({RAZER:?}) 57"),
+                format!("volume Sink({SPDIF:?}) 90"),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn mute_and_volume_steps_keep_their_order() {
         let r = rig();
@@ -754,15 +784,28 @@ mod tests {
         assert_eq!(r.ui.events().iter().filter(|e| *e == "alert k").count(), 1);
     }
 
+    /// QA mutation M19: after a failed operation the control re-reads the
+    /// audio system, so the cache holds what actually happened rather than
+    /// the state before the attempt.
     #[tokio::test]
     async fn a_failed_operation_alerts_and_rereads() {
         let r = rig();
         let c = Control::key("k");
         r.action.refresh().await;
+        r.backend.snapshot.lock().unwrap().sinks[0].muted = true;
         r.backend.fail("mute", 0);
         r.action.press_up(&c, &AudioSettings::default());
         r.action.drain().await;
         assert_eq!(r.ui.alerts(), 1);
+        assert_ne!(
+            *r.action.shared.snapshot.read().await,
+            Ok(fixture_snapshot()),
+            "the cache still holds the read from before the failure"
+        );
+        assert_eq!(
+            *r.action.shared.snapshot.read().await,
+            Ok(r.backend.snapshot.lock().unwrap().clone())
+        );
     }
 
     fn all_inputs_rig() -> Rig {
