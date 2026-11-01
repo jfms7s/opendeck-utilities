@@ -18,10 +18,11 @@ use objc2_core_audio::{
     kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput,
     kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
 };
+use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
 
@@ -265,8 +266,31 @@ fn default_device(selector: u32) -> Option<AudioObjectID> {
     .filter(|&id| id != 0)
 }
 
-fn read_snapshot() -> Result<Snapshot, BackendError> {
+/// What the backend remembers between HAL reads, shared by the action's
+/// reads, the writes and `subscribe`'s loop.
+#[derive(Default)]
+struct Seen {
+    /// Device ids by UID from the last full read, so a write resolves its
+    /// device without enumerating the HAL.
+    ids: Mutex<HashMap<String, AudioObjectID>>,
+    /// The last snapshot read by anyone (`hal::record`).
+    last: Mutex<Option<Snapshot>>,
+}
+
+impl Seen {
+    fn remember_ids(&self, devices: &[HalDevice]) {
+        *self.ids.lock().expect("ids lock") = hal::ids_by_uid(devices);
+    }
+
+    /// Records `now`; whether it differs from the last snapshot read.
+    fn record(&self, now: Snapshot) -> bool {
+        hal::record(&mut self.last.lock().expect("last lock"), now)
+    }
+}
+
+fn read_snapshot(seen: &Seen) -> Result<Snapshot, BackendError> {
     let devices = read_devices()?;
+    seen.remember_ids(&devices);
     Ok(hal::build_snapshot(
         &devices,
         default_device(kAudioHardwarePropertyDefaultOutputDevice),
@@ -281,27 +305,46 @@ fn scope_of(kind: DeviceKind) -> u32 {
     }
 }
 
+/// The device with `uid` that has channels in `scope`, and how many. Looks
+/// the id up in the last read's map and checks it still has that UID (ids
+/// can go stale when devices come and go); only on a miss does it
+/// enumerate the HAL, refreshing the map.
+fn find_device(seen: &Seen, uid: &str, scope: u32) -> Result<(AudioObjectID, u32), BackendError> {
+    let cached = seen.ids.lock().expect("ids lock").get(uid).copied();
+    if let Some(id) = cached
+        && string(id, kAudioDevicePropertyDeviceUID).is_ok_and(|found| found == uid)
+    {
+        let count = channels(id, scope);
+        return if count > 0 {
+            Ok((id, count))
+        } else {
+            Err(BackendError::NoTarget)
+        };
+    }
+    let devices = read_devices()?;
+    seen.remember_ids(&devices);
+    devices
+        .iter()
+        .find(|d| d.uid == uid)
+        .map(|d| (d.id, channels(d.id, scope)))
+        .filter(|&(_, count)| count > 0)
+        .ok_or(BackendError::NoTarget)
+}
+
 /// The device a node names (by UID) and the direction it is used in.
-fn resolve(node: &Node) -> Result<(AudioObjectID, u32, u32), BackendError> {
+fn resolve(seen: &Seen, node: &Node) -> Result<(AudioObjectID, u32, u32), BackendError> {
     let (uid, kind) = match node {
         Node::Sink(uid) => (uid, DeviceKind::Output),
         Node::Source(uid) => (uid, DeviceKind::Input),
         Node::SinkInput(_) => return Err(BackendError::Unsupported(PER_APP.to_string())),
     };
     let scope = scope_of(kind);
-    let device = read_devices()?
-        .into_iter()
-        .find(|d| &d.uid == uid)
-        .ok_or(BackendError::NoTarget)?;
-    let count = channels(device.id, scope);
-    if count == 0 {
-        return Err(BackendError::NoTarget);
-    }
-    Ok((device.id, scope, count))
+    let (id, count) = find_device(seen, uid, scope)?;
+    Ok((id, scope, count))
 }
 
-fn set_volume_blocking(node: &Node, percent: u16) -> Result<(), BackendError> {
-    let (id, scope, count) = resolve(node)?;
+fn set_volume_blocking(seen: &Seen, node: &Node, percent: u16) -> Result<(), BackendError> {
+    let (id, scope, count) = resolve(seen, node)?;
     let targets = elements(id, kAudioDevicePropertyVolumeScalar, scope, count);
     if targets.is_empty() {
         return Err(BackendError::Unsupported(NO_VOLUME.to_string()));
@@ -317,8 +360,8 @@ fn set_volume_blocking(node: &Node, percent: u16) -> Result<(), BackendError> {
     Ok(())
 }
 
-fn set_mute_blocking(node: &Node, mute: Mute) -> Result<(), BackendError> {
-    let (id, scope, count) = resolve(node)?;
+fn set_mute_blocking(seen: &Seen, node: &Node, mute: Mute) -> Result<(), BackendError> {
+    let (id, scope, count) = resolve(seen, node)?;
     let targets = elements(id, kAudioDevicePropertyMute, scope, count);
     let Some(&first) = targets.first() else {
         return Err(BackendError::Unsupported(NO_MUTE.to_string()));
@@ -338,12 +381,8 @@ fn set_mute_blocking(node: &Node, mute: Mute) -> Result<(), BackendError> {
     Ok(())
 }
 
-fn set_default_blocking(kind: DeviceKind, uid: &str) -> Result<(), BackendError> {
-    let scope = scope_of(kind);
-    let device = read_devices()?
-        .into_iter()
-        .find(|d| d.uid == uid && channels(d.id, scope) > 0)
-        .ok_or(BackendError::NoTarget)?;
+fn set_default_blocking(seen: &Seen, kind: DeviceKind, uid: &str) -> Result<(), BackendError> {
+    let (id, _) = find_device(seen, uid, scope_of(kind))?;
     let selector = match kind {
         DeviceKind::Output => kAudioHardwarePropertyDefaultOutputDevice,
         DeviceKind::Input => kAudioHardwarePropertyDefaultInputDevice,
@@ -351,7 +390,7 @@ fn set_default_blocking(kind: DeviceKind, uid: &str) -> Result<(), BackendError>
     set(
         SYSTEM,
         address(selector, kAudioObjectPropertyScopeGlobal, MAIN),
-        device.id,
+        id,
     )
 }
 
@@ -555,16 +594,23 @@ fn listen_devices(listener: &'static Listener) -> Result<(), BackendError> {
     result
 }
 
-/// `tick` is the change channel `subscribe` was given: every successful
-/// write bumps it so the action re-reads the real level (a device may round
-/// the volume to its own steps, so the plugin's prediction can be off).
+/// `tick` is the change channel `subscribe` was given.
 #[derive(Default)]
 pub struct CoreAudioBackend {
     tick: std::sync::Mutex<Option<watch::Sender<u64>>>,
     listener: OnceLock<&'static Listener>,
+    seen: Arc<Seen>,
 }
 
 impl CoreAudioBackend {
+    /// Every successful write bumps `tick` once, so the action re-reads the
+    /// real level: a device may round the volume to its own steps, so the
+    /// plugin's prediction can be off. This is the platform difference:
+    /// on Linux the action trusts its prediction and `pactl subscribe`
+    /// reports the change; on macOS it re-reads once after each write.
+    /// The action's re-read (from this bump; volume and mute are predicted,
+    /// so it doesn't refresh on its own) is recorded in `seen`, so
+    /// `subscribe`'s safety re-read doesn't report the same change again.
     fn written<T>(&self, result: Result<T, BackendError>) -> Result<T, BackendError> {
         if result.is_ok() {
             if let Some(l) = self.listener.get() {
@@ -581,22 +627,28 @@ impl CoreAudioBackend {
 #[async_trait]
 impl AudioBackend for CoreAudioBackend {
     async fn snapshot(&self) -> Result<Snapshot, BackendError> {
-        blocking(read_snapshot).await
+        let seen = self.seen.clone();
+        blocking(move || {
+            let snap = read_snapshot(&seen)?;
+            seen.record(snap.clone());
+            Ok(snap)
+        })
+        .await
     }
 
     async fn set_volume(&self, node: &Node, percent: u16) -> Result<(), BackendError> {
-        let node = node.clone();
-        self.written(blocking(move || set_volume_blocking(&node, percent)).await)
+        let (seen, node) = (self.seen.clone(), node.clone());
+        self.written(blocking(move || set_volume_blocking(&seen, &node, percent)).await)
     }
 
     async fn set_mute(&self, node: &Node, mute: Mute) -> Result<(), BackendError> {
-        let node = node.clone();
-        self.written(blocking(move || set_mute_blocking(&node, mute)).await)
+        let (seen, node) = (self.seen.clone(), node.clone());
+        self.written(blocking(move || set_mute_blocking(&seen, &node, mute)).await)
     }
 
     async fn set_default(&self, kind: DeviceKind, name: &str) -> Result<(), BackendError> {
-        let uid = name.to_string();
-        self.written(blocking(move || set_default_blocking(kind, &uid)).await)
+        let (seen, uid) = (self.seen.clone(), name.to_string());
+        self.written(blocking(move || set_default_blocking(&seen, kind, &uid)).await)
     }
 
     async fn move_stream(&self, _stream: u32, _sink: &str) -> Result<(), BackendError> {
@@ -607,32 +659,42 @@ impl AudioBackend for CoreAudioBackend {
     /// bump `tx` themselves. This loop gives new or changed devices their
     /// listeners and re-reads the HAL only every `hal::SAFETY_POLL` as a
     /// safety net, or every `POLL` while registration fails or a re-read
-    /// found a change no callback reported. Stops when every receiver is
-    /// gone.
+    /// found a change no callback reported. A re-read bumps `tx` only for
+    /// a state nobody has read yet (`Seen::record`). Stops when every
+    /// receiver is gone.
     fn subscribe(&self, tx: watch::Sender<u64>) {
         *self.tick.lock().expect("tick lock") = Some(tx.clone());
         let listener = *self.listener.get_or_init(|| Listener::leak(tx.clone()));
+        let state = self.seen.clone();
         tokio::spawn(async move {
             let system = blocking(move || listen_system(listener)).await;
             let system_ok = system.is_ok();
             let mut health = hal::ListenHealth::default();
-            let mut last: Option<Snapshot> = None;
+            // This loop's own previous read, for the liveness check: a
+            // change counts as missed by the listeners whoever read it.
+            let mut previous: Option<Snapshot> = None;
             let mut seen = listener.counts();
             loop {
+                let read_state = state.clone();
                 let pass = blocking(move || {
                     let synced = if system_ok {
                         listen_devices(listener)
                     } else {
                         Ok(())
                     };
-                    Ok((synced, read_snapshot()))
+                    Ok((synced, read_snapshot(&read_state)))
                 })
                 .await;
                 let (synced, now) = match pass {
                     Ok((synced, now)) => (synced, now.ok()),
                     Err(e) => (Err(e), None),
                 };
-                let changed = matches!((&last, &now), (Some(l), Some(n)) if l != n);
+                let changed = matches!((&previous, &now), (Some(p), Some(n)) if p != n);
+                // Bump only for a state nobody has read yet.
+                let unread = now.as_ref().is_some_and(|now| state.record(now.clone()));
+                if now.is_some() {
+                    previous = now;
+                }
                 let mut counts = listener.counts();
                 if changed && counts == seen {
                     // The callback may still be on its way.
@@ -658,10 +720,7 @@ impl AudioBackend for CoreAudioBackend {
                     ),
                     None => {}
                 }
-                if let Some(now) = now
-                    && last.as_ref() != Some(&now)
-                {
-                    last = Some(now);
+                if unread {
                     tx.send_modify(|n| *n = n.wrapping_add(1));
                 }
                 tokio::select! {
@@ -789,14 +848,57 @@ mod tests {
     impl Drop for Restore {
         fn drop(&mut self) {
             // Errors are expected for a device without that control.
-            let _ = set_volume_blocking(&self.node, self.volume);
+            let _ = set_volume_blocking(&SEEN, &self.node, self.volume);
             let mute = if self.muted { Mute::On } else { Mute::Off };
-            let _ = set_mute_blocking(&self.node, mute);
+            let _ = set_mute_blocking(&SEEN, &self.node, mute);
         }
     }
 
+    /// A stale id (devices came and went) falls back to the scan, which
+    /// refreshes the map; a fresh id is used as is. Runs on any Mac,
+    /// including a CI runner without audio devices (then only the first
+    /// half applies).
+    #[test]
+    fn a_stale_device_id_falls_back_to_a_scan() {
+        let seen = Seen::default();
+        let bogus = AudioObjectID::MAX - 1;
+        seen.ids.lock().unwrap().insert("gone".to_string(), bogus);
+        let out = kAudioObjectPropertyScopeOutput;
+        assert!(matches!(
+            find_device(&seen, "gone", out),
+            Err(BackendError::NoTarget)
+        ));
+        assert!(
+            !seen.ids.lock().unwrap().contains_key("gone"),
+            "map refreshed"
+        );
+        let snap = read_snapshot(&seen).expect("a HAL snapshot");
+        let Some(device) = snap.sinks.first() else {
+            println!("no output device: stale-id fallback only");
+            return;
+        };
+        seen.ids.lock().unwrap().insert(device.name.clone(), bogus);
+        assert_eq!(
+            find_device(&seen, &device.name, out).unwrap().0,
+            device.index
+        );
+        assert_eq!(
+            seen.ids.lock().unwrap().get(&device.name),
+            Some(&device.index)
+        );
+        // Now a hit on the map.
+        assert_eq!(
+            find_device(&seen, &device.name, out).unwrap().0,
+            device.index
+        );
+    }
+
+    /// One backend memory for the hand-run round trip, so its writes take
+    /// the id-map path after the first read (as the plugin's do).
+    static SEEN: std::sync::LazyLock<Seen> = std::sync::LazyLock::new(Seen::default);
+
     fn device_now(kind: DeviceKind, uid: &str) -> crate::audio::model::Device {
-        read_snapshot()
+        read_snapshot(&SEEN)
             .expect("re-reading the HAL")
             .devices(kind)
             .iter()
@@ -810,7 +912,7 @@ mod tests {
     /// and (outputs) makes it the default again, re-reading the HAL after
     /// each write. Prints what it did for the release notes.
     fn round_trip(kind: DeviceKind) {
-        let snap = read_snapshot().expect("a HAL snapshot");
+        let snap = read_snapshot(&SEEN).expect("a HAL snapshot");
         let uid = snap.default_name(kind).to_string();
         println!(
             "{} outputs, {} inputs; default {kind:?}: {uid:?}",
@@ -831,7 +933,7 @@ mod tests {
             muted: start.muted,
         };
 
-        match set_volume_blocking(&node, start.volume) {
+        match set_volume_blocking(&SEEN, &node, start.volume) {
             Ok(()) => {
                 let now = device_now(kind, &uid).volume;
                 println!("volume: wrote {} %, read back {now} %", start.volume);
@@ -839,20 +941,20 @@ mod tests {
                 // A different level too, so the scalar conversion is proven
                 // both ways (the guard restores the start level).
                 let other = if start.volume >= 50 { 30 } else { 70 };
-                set_volume_blocking(&node, other).expect("set_volume to another level");
+                set_volume_blocking(&SEEN, &node, other).expect("set_volume to another level");
                 let now = device_now(kind, &uid).volume;
                 println!("volume: wrote {other} %, read back {now} %");
                 assert!(now.abs_diff(other) <= 1, "{now} vs {other}");
-                set_volume_blocking(&node, start.volume).expect("restoring the volume");
+                set_volume_blocking(&SEEN, &node, start.volume).expect("restoring the volume");
             }
             Err(BackendError::Unsupported(why)) => println!("volume: {why}"),
             Err(e) => panic!("set_volume: {e}"),
         }
 
-        match set_mute_blocking(&node, Mute::Toggle) {
+        match set_mute_blocking(&SEEN, &node, Mute::Toggle) {
             Ok(()) => {
                 let flipped = device_now(kind, &uid).muted;
-                set_mute_blocking(&node, Mute::Toggle).expect("second toggle");
+                set_mute_blocking(&SEEN, &node, Mute::Toggle).expect("second toggle");
                 let back = device_now(kind, &uid).muted;
                 println!("mute: {} -> {flipped} -> {back}", start.muted);
                 assert_eq!(flipped, !start.muted);
@@ -863,8 +965,10 @@ mod tests {
         }
 
         if kind == DeviceKind::Output {
-            set_default_blocking(kind, &uid).expect("set_default to itself");
-            let now = read_snapshot().expect("re-reading the HAL").default_sink;
+            set_default_blocking(&SEEN, kind, &uid).expect("set_default to itself");
+            let now = read_snapshot(&SEEN)
+                .expect("re-reading the HAL")
+                .default_sink;
             println!("default output: set to itself, now {now:?}");
             assert_eq!(now, uid);
         }
