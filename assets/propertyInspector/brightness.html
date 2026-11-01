@@ -61,6 +61,30 @@
 			</div>
 			<div class="status">Changes go through <code>opendeck --process-message</code> (OpenDeck 2.14.0 tested); if one doesn't take effect the control flashes an alert and the plugin log says why.</div>
 		</section>
+		<section class="card">
+			<h2>Schedule</h2>
+			<div class="row">
+				<div class="field">
+					<label for="sched_time_0">At</label>
+					<input id="sched_time_0" type="time" />
+				</div>
+				<div class="field">
+					<label for="sched_value_0">Set (%)</label>
+					<input id="sched_value_0" type="number" min="0" max="100" />
+				</div>
+			</div>
+			<div class="row">
+				<div class="field">
+					<label for="sched_time_1">At</label>
+					<input id="sched_time_1" type="time" />
+				</div>
+				<div class="field">
+					<label for="sched_value_1">Set (%)</label>
+					<input id="sched_value_1" type="number" min="0" max="100" />
+				</div>
+			</div>
+			<p class="hint">Plugin-wide, for every Brightness control and whatever profile is shown. Leave a time empty to turn it off. Turning the dial in between is kept until the next scheduled time.</p>
+		</section>
 	</main>
 	<!-- Defaults and bounds; src/pi_pages.rs checks they match the plugin. -->
 	<script type="application/json" id="defaults">
@@ -80,9 +104,32 @@
 				byId("key_only").classList.toggle("hidden", payload.controller !== "Keypad");
 				byId("dial_only").classList.toggle("hidden", payload.controller === "Keypad");
 				apply(payload.settings || {});
+				pi.requestChoices();
 			},
 			onSettings: apply,
+			onMessage(payload) {
+				if (payload.event === "brightnessSchedule") showSchedule(payload.schedule || []);
+			},
 		});
+
+		// The plugin-wide schedule: shown from the plugin's copy, stored by it.
+		const SLOTS = [0, 1];
+		let schedule = [];
+
+		function showSchedule(rows) {
+			schedule = rows;
+			for (const i of SLOTS) {
+				byId(`sched_time_${i}`).value = rows[i]?.time ?? "";
+				byId(`sched_value_${i}`).value = rows[i]?.value ?? "";
+			}
+		}
+
+		function sendSchedule() {
+			const rows = SLOTS.map((i) => ({ time: byId(`sched_time_${i}`).value, value: byId(`sched_value_${i}`).value }));
+			const payload = PI.schedulePayload(rows, schedule);
+			showSchedule(payload);
+			pi.sendToPlugin({ event: "setSchedule", schedule: payload });
+		}
 
 		function apply(settings) {
 			for (const [id, fallback] of Object.entries(DEFAULTS.settings)) byId(id).value = settings[id] ?? fallback;
@@ -102,6 +149,10 @@
 			Object.assign(byId(id), { min, max });
 		}
 		for (const id of Object.keys(DEFAULTS.settings)) byId(id).addEventListener("change", send);
+		for (const i of SLOTS) {
+			byId(`sched_time_${i}`).addEventListener("change", sendSchedule);
+			byId(`sched_value_${i}`).addEventListener("change", sendSchedule);
+		}
 	</script>
 </body>
 </html>
