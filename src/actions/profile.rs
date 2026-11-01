@@ -584,4 +584,18 @@ mod tests {
         idle().await;
         assert!(r.host.sent().is_empty());
     }
+
+    /// QA mutation M20: a dial that disappears forgets its highlight, so it
+    /// does not come back showing a stale "press to switch".
+    #[tokio::test(start_paused = true)]
+    async fn a_dial_that_disappears_forgets_its_highlight() {
+        let r = rig(true);
+        let c = Control::dial("d");
+        let s = ProfileSettings::default();
+        r.action.appear(&c, &s).await;
+        r.action.rotate(&c, &s, 1).await;
+        assert!(r.action.shared.highlighted.contains_key("d"));
+        r.action.disappear(&c);
+        assert!(!r.action.shared.highlighted.contains_key("d"));
+    }
 }
