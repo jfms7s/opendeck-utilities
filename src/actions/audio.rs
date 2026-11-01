@@ -655,6 +655,26 @@ mod tests {
         assert!(r.action.shared.instances.is_empty());
     }
 
+    /// QA mutation M11: a push-to-talk dial that is held and turned moves
+    /// from `pressed` to `consumed`, and must still re-mute when it
+    /// disappears while held.
+    #[tokio::test]
+    async fn a_held_and_turned_push_to_talk_dial_that_disappears_mutes_again() {
+        let r = rig();
+        let c = Control::dial("d");
+        let s = ptt_mic();
+        r.action.appear(&c, &s).await;
+        r.action.press_down(&c, &s);
+        r.action.rotate(&c, &s, 1, true);
+        r.action.disappear(&c, &s);
+        r.action.drain().await;
+        let calls = r.backend.calls();
+        assert_eq!(calls.first(), Some(&format!("mute Source({MIC:?}) Off")));
+        assert_eq!(calls.last(), Some(&format!("mute Source({MIC:?}) On")));
+        assert!(r.action.shared.pressed.is_empty());
+        assert!(r.action.shared.consumed.is_empty());
+    }
+
     #[tokio::test]
     async fn a_released_or_ordinary_control_that_disappears_does_nothing() {
         let r = rig();
@@ -683,6 +703,41 @@ mod tests {
                 format!("mute Source({MIC:?}) Off"),
                 format!("mute Source({MIC:?}) On"),
                 format!("mute Source({MIC:?}) On"),
+            ]
+        );
+        assert_eq!(r.ui.alerts(), 0);
+    }
+
+    /// QA mutation M12: the retry re-reads the audio system first, so it
+    /// re-targets the current default input rather than the cached one.
+    #[tokio::test]
+    async fn a_failed_push_to_talk_mute_is_retried_on_a_fresh_read() {
+        const OTHER: &str = "alsa_input.test-other";
+        let r = rig();
+        let c = Control::key("k");
+        r.action.refresh().await;
+        r.action.press_down(&c, &ptt_mic());
+        r.action.drain().await;
+        {
+            let mut snap = r.backend.snapshot.lock().unwrap();
+            snap.sources.push(crate::audio::model::Device {
+                index: 99,
+                name: OTHER.into(),
+                description: "Other mic".into(),
+                volume: 40,
+                muted: false,
+            });
+            snap.default_source = OTHER.into();
+        }
+        r.backend.fail_times("mute", 1);
+        r.action.press_up(&c, &ptt_mic());
+        r.action.drain().await;
+        assert_eq!(
+            r.backend.calls(),
+            vec![
+                format!("mute Source({MIC:?}) Off"),
+                format!("mute Source({MIC:?}) On"),
+                format!("mute Source({OTHER:?}) On"),
             ]
         );
         assert_eq!(r.ui.alerts(), 0);
