@@ -116,6 +116,10 @@ struct Shared {
     schedule: watch::Sender<Schedule>,
     /// The stored schedule has been read once (start-up catch-up done).
     loaded: AtomicBool,
+    /// Edited on a page in this run: the plugin is the only writer of its
+    /// global settings, so a later read (an echo, or a start-up read that
+    /// arrives late) can only be the same or older, and is ignored.
+    edited: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -175,6 +179,7 @@ impl BrightnessAction {
                 store,
                 schedule: watch::Sender::new(Schedule::default()),
                 loaded: AtomicBool::new(false),
+                edited: AtomicBool::new(false),
             }),
         }
     }
@@ -230,6 +235,9 @@ impl BrightnessAction {
     /// plugin started at 01:00 is at the night value; later reads only
     /// replace the schedule.
     pub async fn load_schedule(&self, schedule: Schedule) {
+        if self.shared.edited.load(Ordering::SeqCst) {
+            return;
+        }
         self.shared.schedule.send_if_modified(|s| {
             let changed = *s != schedule;
             *s = schedule;
@@ -248,6 +256,7 @@ impl BrightnessAction {
     /// Nothing is applied now; the next boundary applies it.
     async fn edit_schedule(&self, schedule: Schedule) {
         self.shared.loaded.store(true, Ordering::SeqCst);
+        self.shared.edited.store(true, Ordering::SeqCst);
         self.shared.schedule.send_replace(schedule);
         self.shared.store.save(&schedule).await;
     }
@@ -596,10 +605,12 @@ mod tests {
         idle().await;
         assert_eq!(*r.store.saved.lock().unwrap(), vec![night_and_morning()]);
         assert!(r.host.sent().is_empty(), "an edit applies nothing at once");
-        // A start-up read arriving after an edit doesn't catch up either.
-        r.action.load_schedule(night_and_morning()).await;
+        // A start-up read arriving after an edit neither catches up nor
+        // reverts the edit (adversarial review).
+        r.action.load_schedule(Schedule::default()).await;
         idle().await;
         assert!(r.host.sent().is_empty());
+        assert_eq!(*r.action.shared.schedule.borrow(), night_and_morning());
     }
 
     async fn idle() {

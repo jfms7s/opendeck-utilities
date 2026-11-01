@@ -161,28 +161,51 @@ impl LocalClock for SystemClock {
             .map_or(0, |d| d.as_secs() as i64)
     }
 
+    /// Deterministic across DST: of the readings of that local time (one
+    /// normally, two when a fall-back repeats it), the earliest; when a
+    /// spring-forward skips it, what `mktime` normalises it to (later).
+    /// `mktime` with `tm_isdst = -1` alone is not deterministic for a
+    /// repeated time on glibc (it depends on the previous call).
     fn at(&self, t: i64, days: i32, minute: u16) -> i64 {
         let fallback = t + i64::from(days) * 86_400;
-        // 64-bit on every supported target (Linux x86_64, macOS arm64).
-        let time: libc::time_t = t;
-        // SAFETY: `tm` is a plain C struct that `localtime_r` fills in
-        // (all-zero is a valid starting value); both calls get valid
-        // pointers to locals. `tzset` reads TZ, as `localtime` would.
-        unsafe {
-            tzset();
-            let mut tm: libc::tm = std::mem::zeroed();
-            if libc::localtime_r(&time, &mut tm).is_null() {
-                return fallback;
-            }
-            tm.tm_mday += days;
-            tm.tm_hour = i32::from(minute / 60);
-            tm.tm_min = i32::from(minute % 60);
-            tm.tm_sec = 0;
-            // Let mktime work out whether DST applies on that date.
-            tm.tm_isdst = -1;
-            let out = libc::mktime(&mut tm);
-            if out == -1 { fallback } else { out }
-        }
+        let (hour, min) = (i32::from(minute / 60), i32::from(minute % 60));
+        let Some(mut day) = local_tm(t) else {
+            return fallback;
+        };
+        day.tm_mday += days;
+        day.tm_hour = hour;
+        day.tm_min = min;
+        day.tm_sec = 0;
+        let reading = |isdst: i32| {
+            let mut tm = day;
+            tm.tm_isdst = isdst;
+            // SAFETY: `tm` is a valid local struct; mktime normalises it.
+            let out = unsafe { libc::mktime(&mut tm) };
+            (out != -1).then_some(out)
+        };
+        let lands_on_time = |out: libc::time_t| {
+            local_tm(out).is_some_and(|tm| tm.tm_hour == hour && tm.tm_min == min)
+        };
+        [0, 1]
+            .into_iter()
+            .filter_map(reading)
+            .filter(|&out| lands_on_time(out))
+            .min()
+            .or_else(|| reading(-1))
+            .unwrap_or(fallback)
+    }
+}
+
+/// The local calendar fields of `t`. 64-bit `time_t` on every supported
+/// target (Linux x86_64, macOS arm64).
+fn local_tm(t: i64) -> Option<libc::tm> {
+    let time: libc::time_t = t;
+    // SAFETY: `tm` is a plain C struct that `localtime_r` fills in (all-zero
+    // is a valid starting value); `tzset` re-reads TZ as `localtime` would.
+    unsafe {
+        tzset();
+        let mut tm: libc::tm = std::mem::zeroed();
+        (!libc::localtime_r(&time, &mut tm).is_null()).then_some(tm)
     }
 }
 
@@ -375,6 +398,62 @@ mod tests {
         let night = sched(Some("23:00"), 10, Some("08:00"), 70);
         let (morning, _) = night.next_after(evening, at).unwrap();
         assert_eq!(morning - evening, 10 * H);
+    }
+
+    /// Run in a child process with TZ set (see the test below), so no test
+    /// changes this process's environment.
+    #[test]
+    #[ignore = "run by the_system_clock_handles_a_repeated_hour with TZ set"]
+    fn system_clock_fall_back_probe() {
+        let c = SystemClock;
+        // 2026-10-31 12:00 EDT; 01:30 on 2026-11-01 happens twice (EDT, EST).
+        let noon = 1_793_462_400;
+        let first = 1_793_511_000; // 05:30 UTC = 01:30 EDT
+        for _ in 0..3 {
+            assert_eq!(c.at(noon, 1, 90), first);
+            assert_eq!(c.at(first, 0, 90), first, "the same reading from itself");
+            assert_eq!(c.at(first + 3600, 0, 90), first, "and from the repeat");
+        }
+        let s = Schedule {
+            slots: [
+                Slot {
+                    time: Some(90),
+                    value: 10,
+                },
+                Slot {
+                    time: None,
+                    value: 70,
+                },
+            ],
+        };
+        let at = |t, d, m| c.at(t, d, m);
+        assert_eq!(s.next_after(noon, at), Some((first, 10)));
+        let (next, _) = s.next_after(first, at).unwrap();
+        assert!(
+            next > first + 20 * 3600,
+            "fires once that date, not at the repeat"
+        );
+    }
+
+    /// Adversarial review: the repeated 01:30 of a fall-back night must be
+    /// read the same way every time (America/New_York, 2026-11-01).
+    #[test]
+    fn the_system_clock_handles_a_repeated_hour() {
+        if !std::path::Path::new("/usr/share/zoneinfo/America/New_York").exists() {
+            println!("no tzdata: skipped");
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .env("TZ", "America/New_York")
+            .args([
+                "--ignored",
+                "--exact",
+                "schedule::tests::system_clock_fall_back_probe",
+            ])
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && log.contains("1 passed"), "{log}");
     }
 
     #[test]
