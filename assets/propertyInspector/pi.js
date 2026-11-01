@@ -54,6 +54,44 @@
 		};
 	}
 
+	/**
+	 * The Device Brightness payload from the page's field `values` (strings
+	 * as typed): selects pass through, every number in `defaults.bounds` is
+	 * clamped (300 saves 100, an empty field saves the default, never 0).
+	 */
+	function brightnessPayload(values, defaults) {
+		const payload = { key_op: values.key_op, strip_tap: values.strip_tap };
+		for (const [id, bounds] of Object.entries(defaults.bounds)) {
+			payload[id] = clampInt(values[id], bounds, defaults.settings[id]);
+		}
+		return payload;
+	}
+
+	/**
+	 * The Audio page's numbers from its field `values` (strings as typed):
+	 * `step`, `max_volume` and each gesture slot's `volume` (in
+	 * `values.gesture_volumes`, by slot), clamped to `defaults.bounds` with
+	 * the volume bounds lowered to the backend's cap (`caps`, the plugin's
+	 * capabilities block; missing means no cap).
+	 */
+	function audioNumbers(values, defaults, caps) {
+		const bounds = (name) => {
+			const [min, max] = defaults.bounds[name];
+			return [min, applyCapabilities(caps, max).volumeLimit];
+		};
+		const gestureDefault = defaults.gestures.Keypad.press.volume;
+		return {
+			step: clampInt(values.step, defaults.bounds.step, defaults.settings.step),
+			max_volume: clampInt(values.max_volume, bounds("max_volume"), defaults.settings.max_volume),
+			gesture_volumes: Object.fromEntries(
+				Object.entries(values.gesture_volumes || {}).map(([slot, text]) => [
+					slot,
+					clampInt(text, bounds("gesture_volume"), gestureDefault),
+				]),
+			),
+		};
+	}
+
 	/** The JSON in `<script type="application/json" id="…">`. */
 	function readJson(id) {
 		return JSON.parse(document.getElementById(id).textContent);
@@ -98,7 +136,16 @@
 		};
 	}
 
-	const api = { mergeSubset, clampInt, volumeLimit, applyCapabilities, readJson, connect };
+	const api = {
+		mergeSubset,
+		clampInt,
+		volumeLimit,
+		applyCapabilities,
+		brightnessPayload,
+		audioNumbers,
+		readJson,
+		connect,
+	};
 	if (typeof module === "object" && module.exports) {
 		module.exports = api;
 	} else {

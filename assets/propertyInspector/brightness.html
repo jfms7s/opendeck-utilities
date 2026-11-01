@@ -89,12 +89,11 @@
 		}
 
 		function send() {
-			const payload = { key_op: byId("key_op").value, strip_tap: byId("strip_tap").value };
-			for (const id of NUMBERS) {
-				payload[id] = PI.clampInt(byId(id).value, DEFAULTS.bounds[id], DEFAULTS.settings[id]);
-				// Show what was saved, not an out-of-range entry.
-				byId(id).value = payload[id];
-			}
+			const values = {};
+			for (const id of ["key_op", "strip_tap", ...NUMBERS]) values[id] = byId(id).value;
+			const payload = PI.brightnessPayload(values, DEFAULTS);
+			// Show what was saved, not an out-of-range entry.
+			for (const id of NUMBERS) byId(id).value = payload[id];
 			pi.save(payload);
 		}
 

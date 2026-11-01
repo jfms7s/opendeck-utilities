@@ -193,6 +193,18 @@ fn audio_page_reads_every_choice_the_plugin_sends() {
     assert!(AUDIO.contains(r#""audioChoices""#));
 }
 
+/// The pages save through `pi.js`'s pure functions, which the node tests
+/// cover (tests/pi.test.mjs); inline clamping here would escape them.
+#[test]
+fn pages_build_their_payloads_with_the_tested_helpers() {
+    assert!(BRIGHTNESS.contains("PI.brightnessPayload("));
+    assert!(!BRIGHTNESS.contains("parseInt"));
+    for helper in ["PI.audioNumbers(", "PI.applyCapabilities("] {
+        assert!(AUDIO.contains(helper), "{helper}");
+    }
+    assert!(!AUDIO.contains("parseInt"));
+}
+
 #[test]
 fn brightness_defaults_and_bounds_match_the_plugin() {
     let d = page_json(BRIGHTNESS, "defaults");
