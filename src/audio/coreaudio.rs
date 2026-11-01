@@ -18,8 +18,9 @@ use objc2_core_audio::{
     kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput,
     kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
 };
+use objc2_core_foundation::{CFRetained, CFString};
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -32,14 +33,6 @@ const PER_APP: &str = "per-app audio isn't available on macOS";
 const NO_VOLUME: &str = "this device has no volume control";
 const NO_MUTE: &str = "this device has no mute control";
 
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFStringGetLength(s: *const c_void) -> isize;
-    fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
-    fn CFStringGetCString(s: *const c_void, buffer: *mut c_char, size: isize, encoding: u32) -> u8;
-    fn CFRelease(cf: *const c_void);
-}
-const CF_UTF8: u32 = 0x0800_0100;
 /// `kAudioHardwarePropertyRunLoop` (`'rnlp'`, in objc2-core-audio's
 /// `AudioHardwareDeprecated` feature, which this one constant isn't worth).
 const RUN_LOOP: u32 = 0x726e_6c70;
@@ -159,29 +152,17 @@ fn u32_at(b: &[u8], offset: usize) -> Option<u32> {
         .map(|s| u32::from_ne_bytes(s.try_into().expect("4 bytes")))
 }
 
-/// A CFString property (the HAL returns it retained; we release it).
+/// A CFString property (the HAL returns it retained; `CFRetained` releases
+/// it when dropped).
 fn string(id: AudioObjectID, selector: u32) -> Result<String, BackendError> {
     let raw: usize = get(id, address(selector, kAudioObjectPropertyScopeGlobal, MAIN))?;
-    let cf = raw as *const c_void;
-    if cf.is_null() {
+    let Some(ptr) = NonNull::new(raw as *mut CFString) else {
         return Ok(String::new());
-    }
-    // SAFETY: `cf` is a CFString the HAL handed us with +1 ownership; the
-    // buffer is sized by CF for the worst case plus the terminator, and
-    // `cf` is released exactly once.
-    unsafe {
-        let max = CFStringGetMaximumSizeForEncoding(CFStringGetLength(cf), CF_UTF8) + 1;
-        let mut buf = vec![0u8; max.max(1) as usize];
-        let ok = CFStringGetCString(cf, buf.as_mut_ptr().cast(), buf.len() as isize, CF_UTF8);
-        CFRelease(cf);
-        if ok == 0 {
-            return Err(BackendError::CoreAudio(
-                "unreadable device string".to_string(),
-            ));
-        }
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        Ok(String::from_utf8_lossy(&buf[..end]).into_owned())
-    }
+    };
+    // SAFETY: the HAL returns this property as a CFString with +1
+    // ownership, which `CFRetained` takes over and releases once.
+    let cf = unsafe { CFRetained::from_raw(ptr) };
+    Ok(cf.to_string())
 }
 
 /// Channels a device has in `scope`, from its `AudioBufferList` stream
