@@ -755,18 +755,124 @@ mod tests {
     }
 
     /// Runs on the macOS CI runner, which may have no audio device at all:
-    /// the HAL must answer without crashing, whatever it reports.
+    /// the HAL must answer without crashing, whatever it reports. CI runs it
+    /// again with `--nocapture` so the log shows which branch it took.
     #[tokio::test]
     async fn coreaudio_snapshot_does_not_panic() {
         match CoreAudioBackend::default().snapshot().await {
             Ok(snap) => {
+                println!(
+                    "HAL snapshot: {} outputs, {} inputs, default output {:?}, default input {:?}",
+                    snap.sinks.len(),
+                    snap.sources.len(),
+                    snap.default_sink,
+                    snap.default_source,
+                );
                 for d in snap.sinks.iter().chain(&snap.sources) {
                     assert!(!d.name.is_empty());
                     assert!(d.volume <= 100);
                 }
             }
-            Err(e) => eprintln!("no HAL snapshot on this machine: {e}"),
+            Err(e) => println!("no HAL snapshot on this machine: {e}"),
         }
+    }
+
+    /// Puts a device's volume and mute back when dropped, also when an
+    /// assertion fails part-way, so a hand run never leaves the owner's
+    /// volume changed.
+    struct Restore {
+        node: Node,
+        volume: u16,
+        muted: bool,
+    }
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // Errors are expected for a device without that control.
+            let _ = set_volume_blocking(&self.node, self.volume);
+            let mute = if self.muted { Mute::On } else { Mute::Off };
+            let _ = set_mute_blocking(&self.node, mute);
+        }
+    }
+
+    fn device_now(kind: DeviceKind, uid: &str) -> crate::audio::model::Device {
+        read_snapshot()
+            .expect("re-reading the HAL")
+            .devices(kind)
+            .iter()
+            .find(|d| d.name == uid)
+            .cloned()
+            .expect("the device is still there")
+    }
+
+    /// Writes the default device's own volume back, toggles its mute twice
+    /// and (outputs) makes it the default again, re-reading the HAL after
+    /// each write. Prints what it did for the release notes.
+    fn round_trip(kind: DeviceKind) {
+        let snap = read_snapshot().expect("a HAL snapshot");
+        let uid = snap.default_name(kind).to_string();
+        println!(
+            "{} outputs, {} inputs; default {kind:?}: {uid:?}",
+            snap.sinks.len(),
+            snap.sources.len()
+        );
+        let Some(start) = snap.devices(kind).iter().find(|d| d.name == uid).cloned() else {
+            println!("no default {kind:?} device: nothing to round-trip");
+            return;
+        };
+        let node = match kind {
+            DeviceKind::Output => Node::Sink(uid.clone()),
+            DeviceKind::Input => Node::Source(uid.clone()),
+        };
+        let _restore = Restore {
+            node: node.clone(),
+            volume: start.volume,
+            muted: start.muted,
+        };
+
+        match set_volume_blocking(&node, start.volume) {
+            Ok(()) => {
+                let now = device_now(kind, &uid).volume;
+                println!("volume: wrote {} %, read back {now} %", start.volume);
+                assert!(now.abs_diff(start.volume) <= 1, "{now} vs {}", start.volume);
+            }
+            Err(BackendError::Unsupported(why)) => println!("volume: {why}"),
+            Err(e) => panic!("set_volume: {e}"),
+        }
+
+        match set_mute_blocking(&node, Mute::Toggle) {
+            Ok(()) => {
+                let flipped = device_now(kind, &uid).muted;
+                set_mute_blocking(&node, Mute::Toggle).expect("second toggle");
+                let back = device_now(kind, &uid).muted;
+                println!("mute: {} -> {flipped} -> {back}", start.muted);
+                assert_eq!(flipped, !start.muted);
+                assert_eq!(back, start.muted);
+            }
+            Err(BackendError::Unsupported(why)) => println!("mute: {why}"),
+            Err(e) => panic!("set_mute: {e}"),
+        }
+
+        if kind == DeviceKind::Output {
+            set_default_blocking(kind, &uid).expect("set_default to itself");
+            let now = read_snapshot().expect("re-reading the HAL").default_sink;
+            println!("default output: set to itself, now {now:?}");
+            assert_eq!(now, uid);
+        }
+    }
+
+    /// Hand-run on a Mac before publishing (README Mac checklist):
+    /// `cargo test --locked -- --ignored --nocapture coreaudio_round_trip`.
+    #[test]
+    #[ignore = "needs a Mac with an output device; run by hand"]
+    fn coreaudio_round_trip_on_the_default_output() {
+        round_trip(DeviceKind::Output);
+    }
+
+    #[test]
+    #[ignore = "needs a Mac with an input device; run by hand"]
+    fn coreaudio_round_trip_on_the_default_input() {
+        round_trip(DeviceKind::Input);
     }
 
     #[tokio::test]
