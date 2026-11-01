@@ -1,8 +1,13 @@
 name: Release
 # Pushing a v* tag builds the plugin (Linux binaries on Ubuntu, the macOS
 # one on a macOS runner) and creates a *draft* release with the
-# bundle and its SHA256SUMS attached. Publish the draft after running the
-# README's smoke-test checklist on the build (see "Releasing").
+# bundle and its SHA256SUMS attached. The draft's notes start with the
+# README's smoke-test checklist, unticked, under an UNVERIFIED line
+# (scripts/release-body.mjs). Run that checklist on Linux and a Mac, record it
+# in the notes, then publish with scripts/publish-release.sh (see "Releasing").
+# Publishing freezes it: immutable releases are meant to be on for this
+# repository, so a published release's assets and tag can't be replaced - fix
+# a bad release with a new version.
 on:
   push:
     tags: ["v*"]
@@ -122,12 +127,17 @@ jobs:
           unzip -Z opendeck-utilities.streamDeckPlugin | grep -E '^-rwx.*opendeck-utilities-aarch64-apple-darwin$'
           sha256sum opendeck-utilities.streamDeckPlugin > SHA256SUMS
           cat SHA256SUMS
+      # Written after the bundle is zipped and checksummed, so it is in
+      # neither; it only becomes the draft's notes.
+      - name: Write the draft's notes (the README smoke checklist, unticked)
+        run: node scripts/release-body.mjs > RELEASE_BODY.md
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plugin
           path: |
             opendeck-utilities.streamDeckPlugin
             SHA256SUMS
+            RELEASE_BODY.md
           if-no-files-found: error
 
   publish:
@@ -147,8 +157,6 @@ jobs:
           files: |
             opendeck-utilities.streamDeckPlugin
             SHA256SUMS
-          body: |
-            Verify the download with `sha256sum -c SHA256SUMS`.
-
-            Draft: run the README smoke-test checklist on this build and note the
-            OpenDeck, pactl and PipeWire versions here before publishing.
+          # GitHub puts the generated change list after this body.
+          body_path: RELEASE_BODY.md
+          generate_release_notes: true

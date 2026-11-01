@@ -78,7 +78,15 @@ xattr -dr com.apple.quarantine ~/Library/Application\ Support/opendeck/plugins/c
 ## Manual smoke-test checklist
 
 Run this in a live OpenDeck + Stream Deck session (with PipeWire/PulseAudio running and
-at least two output devices) before cutting a release:
+at least two output devices), and the Mac list on a Mac, before publishing a release.
+Record the result per item: pass, fail or **not run** (with why). Each release's draft
+notes start with this list, unticked, under an `UNVERIFIED` line: tick or annotate each
+item there, fill in the run details and delete the `UNVERIFIED` line before publishing.
+The full run (date, OpenDeck, `pactl` and PipeWire or macOS versions, Stream Deck model,
+per-item notes) goes in that release's smoke log, `releases/vX.Y.Z-smoke.md` in the
+maintainer's project notes (kept outside this repository), which the release notes link.
+
+<!-- smoke-checklist:start (scripts/release-body.mjs copies everything up to the end marker into each draft release) -->
 
 **Audio**
 
@@ -155,8 +163,7 @@ On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
 - [ ] The Audio settings page shows "Application (not supported on macOS)" disabled.
 - [ ] Device Brightness and Switch Profile change OpenDeck and confirm without an alert.
 
-Last verified: not recorded yet. At each release, replace this line with the date,
-the OpenDeck, `pactl` and PipeWire versions and the device the checklist passed on.
+<!-- smoke-checklist:end -->
 
 ## Development
 
@@ -195,10 +202,19 @@ shipped in the plugin bundle.
    (a test and `build.mjs` both fail if they differ), and merge that.
 2. Push a `vX.Y.Z` tag matching that version. The release workflow re-runs the
    checks, builds both Linux architectures and the macOS one (on a macOS runner) and
-   creates a **draft** release with the bundle
-   and `SHA256SUMS`.
-3. Install the draft's bundle on Linux and on a Mac, run the smoke-test checklist,
-   update the "Last verified" line above, then publish the draft.
+   creates a **draft** release with the bundle and `SHA256SUMS`. The draft's notes
+   start with the smoke-test checklist above, unticked, under an `UNVERIFIED` line
+   (`scripts/release-body.mjs`), followed by the generated change list.
+3. Install the draft's bundle on Linux and on a Mac, run the smoke-test checklist, write
+   the release's smoke log, tick or annotate every item in the draft's notes, link the
+   log and delete the `UNVERIFIED` line. The release notes are the record; a draft whose
+   notes still say `UNVERIFIED` is not published. Then publish with
+   `scripts/publish-release.sh vX.Y.Z`, which refuses while the notes say `UNVERIFIED`
+   or while GitHub's immutable releases setting is off. Ansible installs the latest
+   *published* release, so publishing is what deploys it. Published releases are
+   immutable: the assets and the tag are frozen, so a broken release is fixed with a new
+   version, never by replacing an asset (`gh api repos/jfms7s/opendeck-utilities/immutable-releases`
+   must report `"enabled":true`; a release published while it is off stays mutable).
 
 ## License
 
