@@ -50,3 +50,26 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
   from the manifest's `CodePaths`.
 - `assets/propertyInspector/pi.css` is shared byte-for-byte with the other jfms7s
   OpenDeck plugins; page-specific rules go in the page.
+
+## Scope (frozen surfaces)
+
+Ruled 2026-11-01 after the 2026-10-07 feature-fit review. Frozen means code and tests
+stay and bugs get fixed, but nothing is added: no new slots, operations, targets,
+options or key modes without lifting the freeze here first (owner decision). Nothing
+is cut for being unplaced: the plugin is public.
+
+- Audio gesture matrix (`src/audio/settings.rs` slots/operations, `audio.html`
+  gestures). Exception: the touch-strip hold slot and half taps (owner-approved).
+- Audio targets (`src/audio/target.rs`): output, input, specific device, App.
+  Exception: "All inputs" (owner-approved), the last new target.
+- Operations and settings no placed control uses (volume up/down, set volume, switch
+  to device, rotate "switch device"/"nothing", step, maximum volume, device subset,
+  label, accent, show percent): no new display options. A state the view shows
+  without a new setting (e.g. "an app is recording") is not an option.
+- Key modes: Brightness key operations, Switch Profile key and device override,
+  profile subset, the key tile renderers.
+- macOS: no new capability until the Mac checklist has run once and a release with
+  that record is published. Bugs and performance fixes may proceed; features that need
+  no new CoreAudio code are not macOS work.
+
+New actions the owner approves (the Power Profile port) are outside this list.
