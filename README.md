@@ -9,15 +9,19 @@ customizable actions for keys and dials:
   and switching on the default one; it reads as muted only when every mic is,
   and shows "1/2 live" when some are not).
   Every gesture is configurable (rotate, press, long-press ≥ ½ s, touch-strip
-  tap): toggle mute, volume up/down, set volume, switch to the next device,
-  switch to a specific device, push-to-talk. The key or touch strip shows a
+  tap, touch-strip hold): toggle mute, volume up/down, set volume, switch to the
+  next device, switch to a specific device, push-to-talk (press only), and for
+  the strip tap "left half: volume down · right half: up". The key or touch strip shows a
   live level, mute state and label, and follows changes made elsewhere. On a
   mic control, the title shows "● <app>" (or "● 2 apps") while an application
   is recording from that mic, muted or not (Linux only).
 - **Device Brightness** - dial steps brightness and press toggles between two
-  presets; a key can increase, decrease, set or toggle.
+  presets; a strip tap toggles too, or steps down/up on the left/right half if
+  chosen; holding the strip toggles. A key can increase, decrease, set or toggle.
 - **Switch Profile** - a key jumps to a profile; a dial scrolls a list of
-  profiles on the touch strip and switches on press.
+  profiles on the touch strip and switches on press. A strip tap switches to the
+  highlighted profile, or goes to the previous/next one on the left/right half if
+  chosen; holding the strip switches to the first profile in the dial's list.
 
 ## Requirements
 
@@ -112,6 +116,11 @@ maintainer's project notes (kept outside this repository), which the release not
       toggles its mute. With Press set to "Push to talk (hold)", holding the dial
       unmutes the mic and releasing mutes it again; switching profile while holding it
       also mutes it again.
+- [ ] Holding a finger on the output dial's touch strip toggles mute (the
+      "Touch-strip hold" default); set it to "Volume up" and a hold raises the
+      volume instead, while a short tap still toggles mute. With "Touch-strip tap"
+      set to "Left half: volume down · right half: up", a tap on the left half of
+      the dial's strip lowers the volume and one on the right half raises it.
 - [ ] Opening a mic test page in a browser makes the input dial's title read
       "● <browser>" within a second, also while muted; closing the tab clears it.
       Opening Plasma's volume applet (or pavucontrol) on its input tab does not.
@@ -127,6 +136,9 @@ maintainer's project notes (kept outside this repository), which the release not
       between the presets.
 - [ ] Changing the brightness in OpenDeck's own settings updates every brightness
       control within a second.
+- [ ] With "Touch strip tap" set to the half step, tapping the left half of the
+      dial's strip lowers the brightness by the step and the right half raises it;
+      holding the strip toggles between the presets.
 
 **Switch Profile** (dial)
 
@@ -134,6 +146,9 @@ maintainer's project notes (kept outside this repository), which the release not
       previous profile (wrapping around) with "press to switch"; pressing the dial or
       tapping the strip switches to it.
 - [ ] Switching profile from OpenDeck's own UI updates every Switch Profile control.
+- [ ] Holding a finger on the strip switches to the first profile in the dial's
+      list. With "Touch strip tap" set to the half step, tapping the right half
+      switches to the next profile at once and the left half to the previous one.
 
 On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
 

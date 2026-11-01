@@ -7,7 +7,7 @@
 use crate::audio::gesture::effective;
 use crate::audio::settings::{self, AudioSettings, OpKind, RotateKind};
 use crate::audio::target::TargetKind;
-use crate::brightness::{self, BrightnessSettings, KeyOp};
+use crate::brightness::{self, BrightnessSettings, KeyOp, StripTap};
 use crate::controller::Controller;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -67,6 +67,7 @@ fn every_op() -> Vec<OpKind> {
         OpKind::CycleDevice,
         OpKind::SetDefaultDevice,
         OpKind::PushToTalk,
+        OpKind::HalfStep,
     ];
     for op in all {
         match op {
@@ -77,7 +78,8 @@ fn every_op() -> Vec<OpKind> {
             | OpKind::SetVolume
             | OpKind::CycleDevice
             | OpKind::SetDefaultDevice
-            | OpKind::PushToTalk => {}
+            | OpKind::PushToTalk
+            | OpKind::HalfStep => {}
         }
     }
     all.to_vec()
@@ -91,7 +93,7 @@ fn audio_defaults_and_bounds_match_the_plugin() {
         assert_eq!(&rust[key], value, "default for {key}");
     }
     for key in rust.as_object().unwrap().keys() {
-        let gesture = ["press", "long_press", "touch_tap"].contains(&key.as_str());
+        let gesture = ["press", "long_press", "touch_tap", "touch_hold"].contains(&key.as_str());
         assert!(
             gesture || d["settings"].get(key).is_some(),
             "the page has no default for {key}"
@@ -110,8 +112,12 @@ fn audio_gesture_defaults_mirror_effective() {
     let d = page_json(AUDIO, "defaults");
     for c in [Controller::Keypad, Controller::Encoder] {
         let e = effective(&AudioSettings::default(), c);
-        let rust =
-            json!({ "press": e.press, "long_press": e.long_press, "touch_tap": e.touch_tap });
+        let rust = json!({
+            "press": e.press,
+            "long_press": e.long_press,
+            "touch_tap": e.touch_tap,
+            "touch_hold": e.touch_hold,
+        });
         assert_eq!(d["gestures"][c.as_str()], rust, "{c:?}");
     }
 }
@@ -149,6 +155,16 @@ fn audio_options_name_real_variants() {
         let v: u16 = v.parse().unwrap();
         assert!(settings::MAX_VOLUME.contains(&v), "{v}");
     }
+}
+
+/// Push-to-talk is offered on press only and the half step on the strip
+/// tap only: the page's rule must name exactly those slots.
+#[test]
+fn audio_page_limits_push_to_talk_and_half_step_to_their_slot() {
+    assert!(
+        AUDIO.contains(r#"const ONLY_IN = { push_to_talk: "press", half_step: "touch_tap" };"#)
+    );
+    assert!(AUDIO.contains(r#"["touch_hold", "Touch-strip hold"]"#));
 }
 
 #[test]
@@ -189,6 +205,10 @@ fn brightness_defaults_and_bounds_match_the_plugin() {
             KeyOp::TogglePresets,
         ],
     );
+    all_parse_as(
+        &select_options(BRIGHTNESS, "strip_tap"),
+        &[StripTap::TogglePresets, StripTap::HalfStep],
+    );
 }
 
 #[test]
@@ -201,6 +221,13 @@ fn profile_page_writes_the_settings_keys_and_reads_the_choices() {
         assert!(PROFILE.contains(&format!("payload.{key}")), "{key}");
     }
     assert!(PROFILE.contains(r#""profileChoices""#));
+    all_parse_as(
+        &select_options(PROFILE, "strip_tap"),
+        &[
+            crate::profile::StripTap::Switch,
+            crate::profile::StripTap::HalfStep,
+        ],
+    );
 }
 
 #[test]

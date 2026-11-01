@@ -1,6 +1,7 @@
 //! Pure brightness logic: which host request a gesture makes, what the
 //! resulting value should be, and what the control shows.
 
+use crate::controller::{Half, strip_half};
 use crate::host::BrightnessChange;
 use crate::lenient::Fields;
 use crate::render::icons::Icon;
@@ -20,6 +21,17 @@ pub enum KeyOp {
     TogglePresets,
 }
 
+/// What a short tap on the dial's touch strip does. A long touch always
+/// toggles the presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StripTap {
+    #[default]
+    TogglePresets,
+    /// Left half one step down, right half one step up.
+    HalfStep,
+}
+
 /// Brightness values are percentages.
 pub const PERCENT: RangeInclusive<u8> = 0..=100;
 /// Dial/key step, in percentage points.
@@ -33,6 +45,7 @@ pub struct BrightnessSettings {
     pub value: u8,
     pub preset_a: u8,
     pub preset_b: u8,
+    pub strip_tap: StripTap,
 }
 
 impl Default for BrightnessSettings {
@@ -43,6 +56,7 @@ impl Default for BrightnessSettings {
             value: 50,
             preset_a: 0,
             preset_b: 50,
+            strip_tap: StripTap::TogglePresets,
         }
     }
 }
@@ -56,6 +70,7 @@ impl<'de> Deserialize<'de> for BrightnessSettings {
         f.number("value", PERCENT, &mut s.value);
         f.number("preset_a", PERCENT, &mut s.preset_a);
         f.number("preset_b", PERCENT, &mut s.preset_b);
+        f.read("strip_tap", &mut s.strip_tap);
         Ok(s)
     }
 }
@@ -118,6 +133,18 @@ pub fn rotate_request(current: Option<u8>, ticks: i16, s: &BrightnessSettings) -
 pub fn toggle_request(current: Option<u8>, s: &BrightnessSettings) -> Request {
     let (a, b) = (s.preset_a.min(100), s.preset_b.min(100));
     set_request(if current == Some(a) { b } else { a })
+}
+
+/// A touch-strip tap at segment-relative `x`, or a long touch (`hold`).
+pub fn tap_request(current: Option<u8>, s: &BrightnessSettings, x: u16, hold: bool) -> Request {
+    if hold || s.strip_tap == StripTap::TogglePresets {
+        return toggle_request(current, s);
+    }
+    let ticks = match strip_half(x) {
+        Half::Left => -1,
+        Half::Right => 1,
+    };
+    rotate_request(current, ticks, s).expect("one tick is never zero")
 }
 
 pub fn key_request(current: Option<u8>, s: &BrightnessSettings) -> Request {
@@ -240,6 +267,7 @@ mod tests {
             value: 30,
             preset_a: 10,
             preset_b: 90,
+            strip_tap: StripTap::HalfStep,
         };
         let back: BrightnessSettings =
             serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
@@ -250,5 +278,42 @@ mod tests {
     fn view() {
         assert_eq!(brightness_view(Some(40)).value_text, "40%");
         assert_eq!(brightness_view(None).color, INACTIVE_COLOR);
+    }
+
+    #[test]
+    fn strip_taps_toggle_by_default_and_step_by_half_when_chosen() {
+        assert_eq!(
+            tap_request(Some(50), &s(), 10, false),
+            toggle_request(Some(50), &s())
+        );
+        let half = BrightnessSettings {
+            strip_tap: StripTap::HalfStep,
+            ..s()
+        };
+        let left = tap_request(Some(50), &half, 99, false);
+        assert_eq!(
+            (left.change, left.expected),
+            (BrightnessChange::Decrease, Some(45))
+        );
+        let right = tap_request(Some(50), &half, 100, false);
+        assert_eq!(
+            (right.change, right.expected),
+            (BrightnessChange::Increase, Some(55))
+        );
+        assert_eq!(
+            tap_request(Some(50), &half, 10, true),
+            toggle_request(Some(50), &half),
+            "a hold always toggles the presets"
+        );
+    }
+
+    #[test]
+    fn settings_without_strip_tap_read_as_before() {
+        let old: BrightnessSettings =
+            serde_json::from_value(serde_json::json!({ "step": 10 })).unwrap();
+        assert_eq!(old.strip_tap, StripTap::TogglePresets);
+        let half: BrightnessSettings =
+            serde_json::from_value(serde_json::json!({ "strip_tap": "half_step" })).unwrap();
+        assert_eq!(half.strip_tap, StripTap::HalfStep);
     }
 }

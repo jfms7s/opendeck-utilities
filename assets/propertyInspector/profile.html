@@ -33,6 +33,18 @@
 			<p class="hint">None ticked = all, in the order they were ticked.</p>
 			<div class="checks" id="cycle"></div>
 		</section>
+
+		<section class="card" id="dial_tap">
+			<h2>Touch strip</h2>
+			<div class="field">
+				<label for="strip_tap">Tap</label>
+				<select id="strip_tap">
+					<option value="switch">Switch to the highlighted profile</option>
+					<option value="half_step">Left half: previous · right half: next (switches at once)</option>
+				</select>
+				<p class="hint">Holding the strip switches to the first profile in the list.</p>
+			</div>
+		</section>
 	</main>
 
 	<script src="pi.js"></script>
@@ -45,6 +57,7 @@
 				const isKey = payload.controller === "Keypad";
 				byId("key_only").classList.toggle("hidden", !isKey);
 				byId("dial_only").classList.toggle("hidden", isKey);
+				byId("dial_tap").classList.toggle("hidden", isKey);
 				settings = payload.settings || {};
 				pi.requestChoices();
 				render();
@@ -69,6 +82,7 @@
 
 		function render() {
 			byId("device").value = settings.device || "";
+			byId("strip_tap").value = settings.strip_tap || "switch";
 			const select = byId("profile");
 			select.replaceChildren();
 			const names = profiles.includes(settings.profile) || !settings.profile ? profiles : [settings.profile, ...profiles];
@@ -100,6 +114,7 @@
 			settings = {
 				device: byId("device").value.trim(),
 				profile: byId("profile").value,
+				strip_tap: byId("strip_tap").value,
 				// Keeps the user's dial order, and profiles not listed right now.
 				cycle: PI.mergeSubset(
 					settings.cycle,
@@ -111,6 +126,7 @@
 		}
 		byId("device").addEventListener("change", send);
 		byId("profile").addEventListener("change", send);
+		byId("strip_tap").addEventListener("change", send);
 	</script>
 </body>
 </html>

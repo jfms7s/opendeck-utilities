@@ -372,9 +372,9 @@ impl AudioAction {
         self.enqueue(control, settings, op, false);
     }
 
-    fn tap(&self, control: &Control, settings: &AudioSettings) {
+    fn tap(&self, control: &Control, settings: &AudioSettings, x: u16, hold: bool) {
         let e = gesture::effective(settings, control.controller);
-        let op = gesture::gesture_operation(&e.touch_tap, settings.step());
+        let op = gesture::tap_operation(&e, x, hold, settings.step());
         self.enqueue(control, settings, op, false);
     }
 }
@@ -455,10 +455,10 @@ impl Action for AudioAction {
         &self,
         instance: &Instance,
         settings: &AudioSettings,
-        _position: (u16, u16),
-        _hold: bool,
+        position: (u16, u16),
+        hold: bool,
     ) -> OpenActionResult<()> {
-        self.tap(&Control::of(instance), settings);
+        self.tap(&Control::of(instance), settings, position.0, hold);
         Ok(())
     }
 
@@ -619,7 +619,7 @@ mod tests {
         let c = Control::dial("d");
         let s = AudioSettings::default();
         r.action.rotate(&c, &s, 1, false);
-        r.action.tap(&c, &s);
+        r.action.tap(&c, &s, 0, false);
         r.action.rotate(&c, &s, 1, false);
         r.action.drain().await;
         assert_eq!(

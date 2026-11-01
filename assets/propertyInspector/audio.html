@@ -100,25 +100,30 @@
 			"Keypad": {
 				"press": { "op": "toggle_mute", "volume": 50, "device": "" },
 				"long_press": { "op": "none", "volume": 50, "device": "" },
-				"touch_tap": { "op": "none", "volume": 50, "device": "" }
+				"touch_tap": { "op": "none", "volume": 50, "device": "" },
+				"touch_hold": { "op": "none", "volume": 50, "device": "" }
 			},
 			"Encoder": {
 				"press": { "op": "toggle_mute", "volume": 50, "device": "" },
 				"long_press": { "op": "cycle_device", "volume": 50, "device": "" },
-				"touch_tap": { "op": "toggle_mute", "volume": 50, "device": "" }
+				"touch_tap": { "op": "toggle_mute", "volume": 50, "device": "" },
+				"touch_hold": { "op": "toggle_mute", "volume": 50, "device": "" }
 			}
 		},
 		"ops": [
 			["none", "Nothing"], ["toggle_mute", "Toggle mute"], ["volume_up", "Volume up"],
 			["volume_down", "Volume down"], ["set_volume", "Set volume to…"], ["cycle_device", "Switch to next device"],
-			["set_default_device", "Switch to device…"], ["push_to_talk", "Push to talk (hold)"]
+			["set_default_device", "Switch to device…"], ["push_to_talk", "Push to talk (hold)"],
+			["half_step", "Left half: volume down · right half: up"]
 		]
 	}
 	</script>
 	<script src="pi.js"></script>
 	<script>
 		const DEFAULTS = PI.readJson("defaults");
-		const SLOTS = [["press", "Press"], ["long_press", "Long press (hold ½ s)"], ["touch_tap", "Touch-strip tap"]];
+		const SLOTS = [["press", "Press"], ["long_press", "Long press (hold ½ s)"], ["touch_tap", "Touch-strip tap"], ["touch_hold", "Touch-strip hold"]];
+		// The strip has no release (push-to-talk is press-only) and only a tap has a position.
+		const ONLY_IN = { push_to_talk: "press", half_step: "touch_tap" };
 		const byId = (id) => document.getElementById(id);
 
 		let controller = "Keypad", settings = {}, choices = null;
@@ -166,14 +171,14 @@
 			root.replaceChildren();
 			const [minVolume, maxVolume] = DEFAULTS.bounds.gesture_volume;
 			for (const [slot, title] of SLOTS) {
-				if (slot === "touch_tap" && controller !== "Encoder") continue;
+				if (slot.startsWith("touch_") && controller !== "Encoder") continue;
 				const label = document.createElement("label");
 				label.textContent = title;
 				const select = document.createElement("select");
 				select.dataset.slot = slot;
 				select.dataset.field = "op";
 				for (const [value, text] of DEFAULTS.ops) {
-					if (value === "push_to_talk" && slot !== "press") continue;
+					if (ONLY_IN[value] && ONLY_IN[value] !== slot) continue;
 					const option = document.createElement("option");
 					option.value = value;
 					option.textContent = text;
