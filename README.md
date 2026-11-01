@@ -165,6 +165,8 @@ On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
 - [ ] An output without a volume control (e.g. HDMI) shows 100 % and a press alerts
       instead of crashing.
 - [ ] The Audio settings page shows "Application (not supported on macOS)" disabled.
+- [ ] With Maximum volume at 100 %, a device at full volume shows a full bar; the
+      Audio settings page shows 125 % and 150 % disabled ("max 100% here").
 - [ ] Device Brightness and Switch Profile change OpenDeck and confirm without an alert.
 - [ ] From a checkout of the release tag, `cargo test --locked -- --ignored --nocapture coreaudio_round_trip`
       passes (it writes the default output's and input's volume to 30 or 70 % and

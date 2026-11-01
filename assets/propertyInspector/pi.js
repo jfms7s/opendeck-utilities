@@ -26,6 +26,14 @@
 		return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 	}
 
+	/**
+	 * The highest volume to offer: a setting's upper `bound`, lowered to the
+	 * backend's `cap` (100 on macOS) when there is one (null/undefined: none).
+	 */
+	function volumeLimit(cap, bound) {
+		return Math.min(bound, cap ?? bound);
+	}
+
 	/** The JSON in `<script type="application/json" id="…">`. */
 	function readJson(id) {
 		return JSON.parse(document.getElementById(id).textContent);
@@ -70,7 +78,7 @@
 		};
 	}
 
-	const api = { mergeSubset, clampInt, readJson, connect };
+	const api = { mergeSubset, clampInt, volumeLimit, readJson, connect };
 	if (typeof module === "object" && module.exports) {
 		module.exports = api;
 	} else {

@@ -30,8 +30,10 @@ fn target_icon(settings: &AudioSettings, fallback_label: &str) -> Icon {
     }
 }
 
+/// `max`: the volume that fills the bar (`AudioSettings::effective_max`).
 fn level(
     settings: &AudioSettings,
+    max: u16,
     fallback: &str,
     volume: u16,
     muted: bool,
@@ -47,7 +49,7 @@ fn level(
     LevelView {
         title: title(settings, fallback),
         value_text,
-        bar: (f64::from(volume) * 100.0 / f64::from(settings.max_volume())).clamp(0.0, 100.0),
+        bar: (f64::from(volume) * 100.0 / f64::from(max)).clamp(0.0, 100.0),
         color: if muted {
             MUTED_COLOR.to_string()
         } else {
@@ -72,12 +74,15 @@ fn inactive(settings: &AudioSettings, label: &str, status: &str) -> LevelView {
 /// `recorders`: the apps recording from the target's input(s)
 /// (`target::recorders_for`). While any records, the title names them in
 /// place of the label, muted or not: the point is knowing who has the mic.
+/// `cap`: the backend's volume cap (`Snapshot::volume_cap`), so a device at
+/// the cap shows a full bar.
 pub fn audio_view(
     resolved: &Resolved,
     settings: &AudioSettings,
+    cap: Option<u16>,
     recorders: &[String],
 ) -> LevelView {
-    let mut view = target_view(resolved, settings);
+    let mut view = target_view(resolved, settings, settings.effective_max(cap));
     match recorders {
         [] => {}
         [app] => view.title = shorten(&format!("● {app}"), TITLE_CHARS),
@@ -86,7 +91,7 @@ pub fn audio_view(
     view
 }
 
-fn target_view(resolved: &Resolved, settings: &AudioSettings) -> LevelView {
+fn target_view(resolved: &Resolved, settings: &AudioSettings, max: u16) -> LevelView {
     let label = resolved.label();
     match resolved {
         Resolved::Device { kind, device } => {
@@ -94,11 +99,12 @@ fn target_view(resolved: &Resolved, settings: &AudioSettings) -> LevelView {
                 DeviceKind::Output => Icon::Speaker,
                 DeviceKind::Input => Icon::Mic,
             };
-            level(settings, &label, device.volume, device.muted, icon)
+            level(settings, max, &label, device.volume, device.muted, icon)
         }
         Resolved::App { streams } => match streams.first() {
             Some(first) => level(
                 settings,
+                max,
                 &label,
                 first.volume,
                 first.muted,
@@ -110,7 +116,7 @@ fn target_view(resolved: &Resolved, settings: &AudioSettings) -> LevelView {
             // Muted only when every mic is: a half-muted set must not
             // read as silence.
             let muted = all_muted(devices);
-            let mut view = level(settings, &label, default.volume, muted, Icon::Mic);
+            let mut view = level(settings, max, &label, default.volume, muted, Icon::Mic);
             let live = devices.iter().filter(|d| !d.muted).count();
             if !muted && live < devices.len() {
                 view.value_text = format!("{live}/{} live", devices.len());
@@ -144,6 +150,7 @@ mod tests {
         audio_view(
             &resolve(settings.target, &settings.target_name, &fixture_snapshot()),
             settings,
+            None,
             &[],
         )
     }
@@ -212,6 +219,28 @@ mod tests {
         assert_eq!(v.value_text, "");
     }
 
+    /// Code-quality review: on macOS (cap 100) a device at full volume
+    /// shows a full bar even with Maximum volume at 150 %; without a cap
+    /// the bar is relative to Maximum volume as before.
+    #[test]
+    fn a_device_at_the_volume_cap_fills_the_bar() {
+        let mut snap = fixture_snapshot();
+        let settings = AudioSettings {
+            max_volume: 150,
+            ..AudioSettings::default()
+        };
+        let default = snap.default_sink.clone();
+        snap.sinks
+            .iter_mut()
+            .find(|d| d.name == default)
+            .unwrap()
+            .volume = 100;
+        let resolved = resolve(settings.target, "", &snap);
+        assert_eq!(audio_view(&resolved, &settings, Some(100), &[]).bar, 100.0);
+        let uncapped = audio_view(&resolved, &settings, None, &[]).bar;
+        assert!((uncapped - 100.0 * 100.0 / 150.0).abs() < 1e-9);
+    }
+
     #[test]
     fn bad_accent_falls_back() {
         let v = view_for(&AudioSettings {
@@ -242,7 +271,7 @@ mod tests {
             target: TargetKind::AllInputs,
             ..AudioSettings::default()
         };
-        audio_view(&resolve(settings.target, "", &snap), &settings, &[])
+        audio_view(&resolve(settings.target, "", &snap), &settings, None, &[])
     }
 
     #[test]
@@ -269,7 +298,7 @@ mod tests {
         };
         let resolved = resolve(settings.target, "", &fixture_snapshot());
         let recorders: Vec<String> = recorders.iter().map(|s| s.to_string()).collect();
-        audio_view(&resolved, &settings, &recorders)
+        audio_view(&resolved, &settings, None, &recorders)
     }
 
     #[test]
@@ -293,7 +322,10 @@ mod tests {
             ..AudioSettings::default()
         };
         let resolved = resolve(settings.target, "", &fixture_snapshot());
-        assert_eq!(mic_view(&[]), target_view(&resolved, &settings));
+        assert_eq!(
+            mic_view(&[]),
+            target_view(&resolved, &settings, settings.max_volume())
+        );
         assert_eq!(mic_view(&[]).title, "Mic");
     }
 
@@ -315,7 +347,7 @@ mod tests {
         let recorders = crate::audio::target::recorders_for(&speakers, &snap);
         assert!(recorders.is_empty());
         assert_eq!(
-            audio_view(&speakers, &settings, &recorders).title,
+            audio_view(&speakers, &settings, None, &recorders).title,
             "Razer Leviathan V2 …"
         );
         let mic = resolve(TargetKind::DefaultInput, "", &snap);

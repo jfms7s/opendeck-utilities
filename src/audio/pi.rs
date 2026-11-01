@@ -42,6 +42,8 @@ pub fn choices(
         "inputs": devices(&snap.sources),
         "apps": apps,
         "appsSupported": !snap.apps_unsupported,
+        // The highest volume the backend accepts (null: no cap).
+        "volumeCap": snap.volume_cap,
         "effective": {
             "press": e.press,
             "long_press": e.long_press,
@@ -65,6 +67,16 @@ mod tests {
         snap.apps_unsupported = true;
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
         assert_eq!(c["appsSupported"], false);
+    }
+
+    #[test]
+    fn says_whether_volume_is_capped_here() {
+        let mut snap = fixture_snapshot();
+        let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
+        assert_eq!(c["volumeCap"], Value::Null);
+        snap.volume_cap = Some(100);
+        let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
+        assert_eq!(c["volumeCap"], 100);
     }
 
     #[test]

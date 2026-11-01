@@ -144,6 +144,7 @@
 				choices = payload;
 				controller = choices.controller || controller;
 				markAppSupport();
+				markVolumeCap();
 				render();
 			},
 		});
@@ -155,6 +156,22 @@
 			const supported = choices.appsSupported !== false;
 			option.disabled = !supported;
 			option.textContent = supported ? "Application" : "Application (not supported on macOS)";
+		}
+
+		// macOS caps volume at 100 %: keep the higher Maximum volume options
+		// (a saved control still shows what it was) but disable them.
+		function markVolumeCap() {
+			for (const option of byId("max_volume").options) {
+				const value = Number(option.value);
+				option.disabled = value > volumeBounds("max_volume")[1];
+				option.textContent = option.disabled ? `${value}% (max ${choices.volumeCap}% here)` : `${value}%`;
+			}
+		}
+
+		/** A volume setting's bounds, its upper end lowered to the backend's cap. */
+		function volumeBounds(name) {
+			const [min, max] = DEFAULTS.bounds[name];
+			return [min, PI.volumeLimit(choices?.volumeCap, max)];
 		}
 
 		function gestureValue(slot) {
@@ -169,7 +186,7 @@
 		function buildGestures() {
 			const root = byId("gestures");
 			root.replaceChildren();
-			const [minVolume, maxVolume] = DEFAULTS.bounds.gesture_volume;
+			const [minVolume, maxVolume] = volumeBounds("gesture_volume");
 			for (const [slot, title] of SLOTS) {
 				if (slot.startsWith("touch_") && controller !== "Encoder") continue;
 				const label = document.createElement("label");
@@ -265,7 +282,8 @@
 			byId("target").value = settings.target || d.target;
 			byId("target_name").value = settings.target_name || d.target_name;
 			byId("step").value = settings.step ?? d.step;
-			byId("max_volume").value = String(settings.max_volume ?? d.max_volume);
+			// Above the cap, show the cap; the stored value changes only on save.
+			byId("max_volume").value = String(Math.min(settings.max_volume ?? d.max_volume, volumeBounds("max_volume")[1]));
 			byId("rotate").value = settings.rotate || d.rotate;
 			byId("label").value = settings.label || d.label;
 			byId("accent").value = /^#[0-9a-fA-F]{6}$/.test(settings.accent || "") ? settings.accent : d.accent;
@@ -292,7 +310,7 @@
 				target: byId("target").value,
 				target_name: byId("target_name").value.trim(),
 				step: PI.clampInt(byId("step").value, DEFAULTS.bounds.step, d.step),
-				max_volume: PI.clampInt(byId("max_volume").value, DEFAULTS.bounds.max_volume, d.max_volume),
+				max_volume: PI.clampInt(byId("max_volume").value, volumeBounds("max_volume"), d.max_volume),
 				rotate: byId("rotate").value,
 				label: byId("label").value,
 				accent: byId("accent").value,
@@ -312,7 +330,7 @@
 				}
 				next[slot] = {
 					op: select.value,
-					volume: PI.clampInt(field(slot, "volume").value, DEFAULTS.bounds.gesture_volume, DEFAULTS.gestures.Keypad.press.volume),
+					volume: PI.clampInt(field(slot, "volume").value, volumeBounds("gesture_volume"), DEFAULTS.gestures.Keypad.press.volume),
 					device: field(slot, "device").value.trim(),
 				};
 			}
