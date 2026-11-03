@@ -15,13 +15,25 @@ use tokio::sync::{Mutex, watch};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DndSettings {}
 
+/// The plugin's inhibition: its cookie and the server generation that
+/// issued it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Held {
+    cookie: u32,
+    generation: u64,
+}
+
 struct Shared {
     port: Arc<dyn NotificationsPort>,
     ui: Arc<dyn Ui>,
     instances: Instances<()>,
-    /// The plugin's inhibition, one for every DND key. The lock also
-    /// serialises presses, so two quick presses can't both inhibit.
-    cookie: Mutex<Option<u32>>,
+    /// One inhibition for every DND key. Never held across an await, so a
+    /// render never waits on the bus.
+    held: std::sync::Mutex<Option<Held>>,
+    /// Serialises presses, so two quick presses can't both inhibit. Held
+    /// across the D-Bus call, which `dbus.rs` bounds with a timeout; only
+    /// press tasks take it, never the event loop.
+    pressing: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -43,7 +55,8 @@ impl DndAction {
                 port,
                 ui,
                 instances: Instances::new(),
-                cookie: Mutex::new(None),
+                held: std::sync::Mutex::new(None),
+                pressing: Mutex::new(()),
             }),
         }
     }
@@ -52,8 +65,24 @@ impl DndAction {
         *self.shared.port.inhibition().borrow()
     }
 
+    fn held(&self) -> Option<Held> {
+        *self.shared.held.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn set_held(&self, held: Option<Held>) {
+        *self.shared.held.lock().unwrap_or_else(|e| e.into_inner()) = held;
+    }
+
+    /// The plugin holds an inhibition the current server knows about. A
+    /// cookie from before a server restart is not ours any more: sending it
+    /// could lift someone else's inhibition.
+    fn ours(&self) -> bool {
+        self.held()
+            .is_some_and(|h| h.generation == self.shared.port.generation())
+    }
+
     async fn render_all(&self) {
-        let ours = self.shared.cookie.lock().await.is_some();
+        let ours = self.ours();
         let shown = view(self.inhibition(), ours);
         render_each(&self.shared.instances, |control, ()| {
             let shown = shown.clone();
@@ -71,7 +100,7 @@ impl DndAction {
     async fn appear(&self, control: &Control) {
         self.shared.ui.forget(&control.id);
         self.shared.instances.insert(control, &());
-        let ours = self.shared.cookie.lock().await.is_some();
+        let ours = self.ours();
         self.shared
             .ui
             .show_dnd(control, &view(self.inhibition(), ours))
@@ -82,12 +111,21 @@ impl DndAction {
         self.shared.instances.remove(&control.id);
     }
 
-    async fn key(&self, control: &Control) {
-        let mut cookie = self.shared.cookie.lock().await;
-        let refused = match press(self.inhibition(), cookie.is_some()) {
+    /// A press runs on its own task: the D-Bus call never holds up the
+    /// event loop that serves every action.
+    fn key(&self, control: &Control) {
+        let action = self.clone();
+        let control = control.clone();
+        tokio::spawn(async move { action.press(&control).await });
+    }
+
+    async fn press(&self, control: &Control) {
+        let pressing = self.shared.pending_press().await;
+        let generation = self.shared.port.generation();
+        let refused = match press(self.inhibition(), self.ours()) {
             Press::Inhibit => match self.shared.port.inhibit().await {
-                Ok(c) => {
-                    *cookie = Some(c);
+                Ok(cookie) => {
+                    self.set_held(Some(Held { cookie, generation }));
                     false
                 }
                 Err(e) => {
@@ -96,11 +134,12 @@ impl DndAction {
                 }
             },
             Press::UnInhibit => {
-                let c = cookie.take().expect("UnInhibit only with a cookie");
-                match self.shared.port.uninhibit(c).await {
+                let held = self.held().expect("UnInhibit only with a cookie");
+                // Forgotten either way: on failure the server no longer
+                // knows the cookie (it restarted) or can't be reached.
+                self.set_held(None);
+                match self.shared.port.uninhibit(held.cookie).await {
                     Ok(()) => false,
-                    // The server no longer knows the cookie (it restarted)
-                    // or can't be reached; either way it can't be used again.
                     Err(e) => {
                         log::warn!("Do Not Disturb: UnInhibit failed: {e}");
                         true
@@ -109,11 +148,17 @@ impl DndAction {
             }
             Press::Refuse => true,
         };
-        drop(cookie);
+        drop(pressing);
         if refused {
             self.shared.ui.alert(&control.id).await;
         }
         self.render_all().await;
+    }
+}
+
+impl Shared {
+    async fn pending_press(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.pressing.lock().await
     }
 }
 
@@ -133,7 +178,7 @@ impl Action for DndAction {
     }
 
     async fn key_up(&self, instance: &Instance, _: &DndSettings) -> OpenActionResult<()> {
-        self.key(&Control::of(instance)).await;
+        self.key(&Control::of(instance));
         Ok(())
     }
 }
@@ -155,9 +200,9 @@ mod tests {
         let (action, port, ui) = rig(Inhibition::Off);
         let k = Control::key("k");
         action.appear(&k).await;
-        action.key(&k).await;
+        action.press(&k).await;
         assert_eq!(ui.events().last().unwrap(), "dnd k On press to resume");
-        action.key(&k).await;
+        action.press(&k).await;
         assert_eq!(ui.events().last().unwrap(), "dnd k Off press to silence");
         assert_eq!(port.calls(), vec!["inhibit", "uninhibit 1"]);
         assert_eq!(ui.alerts(), 0);
@@ -170,7 +215,7 @@ mod tests {
         let k = Control::key("k");
         action.appear(&k).await;
         assert_eq!(ui.events().last().unwrap(), "dnd k On by desktop");
-        action.key(&k).await;
+        action.press(&k).await;
         assert!(port.calls().is_empty());
         assert_eq!(ui.alerts(), 1);
     }
@@ -182,7 +227,7 @@ mod tests {
         let (a, b) = (Control::key("a"), Control::key("b"));
         action.appear(&a).await;
         action.appear(&b).await;
-        action.key(&a).await;
+        action.press(&a).await;
         let mut last: Vec<String> = ui.events().split_off(ui.events().len() - 2);
         last.sort();
         assert_eq!(
@@ -213,9 +258,47 @@ mod tests {
         *port.fail.lock().unwrap() = true;
         let k = Control::key("k");
         action.appear(&k).await;
-        action.key(&k).await;
+        action.press(&k).await;
         assert_eq!(ui.alerts(), 1);
-        assert!(action.shared.cookie.lock().await.is_none());
+        assert!(action.held().is_none());
+    }
+
+    /// After a server restart the old cookie is not ours: someone else's
+    /// inhibition shows "by desktop" and a press sends no stale UnInhibit.
+    #[tokio::test]
+    async fn a_cookie_from_before_a_server_restart_is_not_used() {
+        let (action, port, ui) = rig(Inhibition::Off);
+        let k = Control::key("k");
+        action.appear(&k).await;
+        action.press(&k).await;
+        port.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        port.set(Inhibition::On);
+        action.render_all().await;
+        assert_eq!(ui.events().last().unwrap(), "dnd k On by desktop");
+        action.press(&k).await;
+        assert_eq!(port.calls(), vec!["inhibit"]);
+        assert_eq!(ui.alerts(), 1);
+    }
+
+    /// A server that doesn't answer holds up neither the key handler nor a
+    /// re-render (the call itself is bounded in `dbus.rs`).
+    #[tokio::test]
+    async fn a_hung_call_blocks_neither_the_handler_nor_renders() {
+        let (action, port, ui) = rig(Inhibition::Off);
+        let k = Control::key("k");
+        action.appear(&k).await;
+        let hang = port.hang.lock().await;
+        action.key(&k);
+        tokio::task::yield_now().await;
+        assert_eq!(port.calls(), vec!["inhibit"], "the press is in flight");
+        port.set(Inhibition::On);
+        tokio::time::timeout(std::time::Duration::from_secs(1), action.render_all())
+            .await
+            .expect("render waited on the press");
+        drop(hang);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert_eq!(ui.events().last().unwrap(), "dnd k On press to resume");
     }
 
     #[tokio::test]
@@ -227,7 +310,7 @@ mod tests {
             ui.events().last().unwrap(),
             "dnd k Unavailable no notification server"
         );
-        action.key(&k).await;
+        action.press(&k).await;
         assert!(port.calls().is_empty());
         assert_eq!(ui.alerts(), 1);
     }

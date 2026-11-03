@@ -58,12 +58,18 @@ async fn an_inhibited_change_from_elsewhere_is_reported() {
     assert!(server.calls().is_empty(), "the plugin only listened");
 }
 
+/// No server: unknown, and a press fails cleanly. A server that appears
+/// later is picked up from the name-owner change, as a new generation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_notification_server_reads_as_unknown() {
+async fn a_server_that_appears_later_is_picked_up() {
     let bus = PrivateBus::start();
     let port = DbusNotifications::start(Some(bus.address.clone()));
-    // Give it time to try; it stays Unknown and a press fails cleanly.
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(*port.inhibition().borrow(), Inhibition::Unknown);
     assert!(port.inhibit().await.is_err());
+    let before = port.generation();
+    let _server = serve_notifications(&bus).await;
+    let mut rx = port.inhibition();
+    until(&mut rx, Inhibition::Off).await;
+    assert!(port.generation() > before);
 }

@@ -23,6 +23,9 @@ pub trait NotificationsPort: Send + Sync {
     /// ends with `uninhibit(cookie)` or when the plugin's bus connection
     /// closes (the plugin exits).
     async fn inhibit(&self) -> Result<u32, String>;
+    /// Changes when the notification server is replaced (restart): a
+    /// cookie from an earlier generation is no longer ours.
+    fn generation(&self) -> u64;
     async fn uninhibit(&self, cookie: u32) -> Result<(), String>;
 }
 
@@ -50,6 +53,9 @@ impl NotificationsPort for Unsupported {
     async fn inhibit(&self) -> Result<u32, String> {
         Err("notification inhibition is Linux only".into())
     }
+    fn generation(&self) -> u64 {
+        0
+    }
     async fn uninhibit(&self, _cookie: u32) -> Result<(), String> {
         Err("notification inhibition is Linux only".into())
     }
@@ -67,6 +73,9 @@ pub mod fake {
         state: watch::Sender<Inhibition>,
         pub calls: Mutex<Vec<String>>,
         pub fail: Mutex<bool>,
+        /// Hangs every call until released (a server that doesn't answer).
+        pub hang: tokio::sync::Mutex<()>,
+        pub generation: std::sync::atomic::AtomicU64,
         next: Mutex<u32>,
     }
 
@@ -76,6 +85,8 @@ pub mod fake {
                 state: watch::Sender::new(initial),
                 calls: Mutex::default(),
                 fail: Mutex::new(false),
+                hang: tokio::sync::Mutex::new(()),
+                generation: Default::default(),
                 next: Mutex::new(1),
             }
         }
@@ -94,8 +105,12 @@ pub mod fake {
         fn inhibition(&self) -> watch::Receiver<Inhibition> {
             self.state.subscribe()
         }
+        fn generation(&self) -> u64 {
+            self.generation.load(std::sync::atomic::Ordering::SeqCst)
+        }
         async fn inhibit(&self) -> Result<u32, String> {
             self.calls.lock().unwrap().push("inhibit".into());
+            drop(self.hang.lock().await);
             if *self.fail.lock().unwrap() {
                 return Err("fake failure".into());
             }

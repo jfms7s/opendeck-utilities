@@ -189,6 +189,8 @@ maintainer's project notes (kept outside this repository), which the release not
       again shows "Off" and `notify-send test` pops up.
 - [ ] Turning on Plasma's own Do Not Disturb makes the key show "On · by desktop"
       within a second; a press alerts and changes nothing.
+- [ ] With the key "On", quitting OpenDeck ends the silencing: `notify-send test`
+      pops up again.
 
 **Flatpak OpenDeck** (optional; run when a Flatpak OpenDeck is available, e.g. in a VM)
 

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use futures_util::{Stream, StreamExt, stream};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{OnceCell, watch};
 use zbus::proxy::CacheProperties;
@@ -28,6 +28,9 @@ const REASON: &str = "Do Not Disturb key";
 /// Re-read even without a signal (a server that never emits, or one that
 /// restarted under a name the subscription missed).
 const SAFETY_POLL: Duration = Duration::from_secs(30);
+/// Every call gives up after this: a server that is alive but not
+/// answering must not hold a press (or the cookie lock) forever.
+const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
 // Must match SERVICE, PATH and INTERFACE (the macro needs literals).
 #[proxy(
@@ -50,11 +53,20 @@ trait Notifications {
     fn inhibited(&self) -> zbus::Result<bool>;
 }
 
+enum Change {
+    Property,
+    Owner,
+}
+
 pub struct DbusNotifications {
     /// `None`: the session bus (`DBUS_SESSION_BUS_ADDRESS`).
     address: Option<String>,
     connection: OnceCell<Connection>,
     state: watch::Sender<Inhibition>,
+    /// Bumped whenever the service name changes hands: cookies from an
+    /// earlier server mean nothing to the new one.
+    generation: AtomicU64,
+    /// A failure was logged since the last good read (warn once per outage).
     warned: AtomicBool,
 }
 
@@ -65,6 +77,7 @@ impl DbusNotifications {
             address,
             connection: OnceCell::new(),
             state: watch::Sender::new(Inhibition::Unknown),
+            generation: AtomicU64::new(0),
             warned: AtomicBool::new(false),
         });
         tokio::spawn(me.clone().run());
@@ -74,14 +87,11 @@ impl DbusNotifications {
     async fn connection(&self) -> zbus::Result<&Connection> {
         self.connection
             .get_or_try_init(|| async {
-                match &self.address {
-                    Some(address) => {
-                        zbus::connection::Builder::address(address.as_str())
-                            .build()
-                            .await
-                    }
-                    None => Connection::session().await,
-                }
+                let builder = match &self.address {
+                    Some(address) => zbus::connection::Builder::address(address.as_str()),
+                    None => zbus::connection::Builder::session(),
+                };
+                builder.method_timeout(CALL_TIMEOUT).build().await
             })
             .await
     }
@@ -109,8 +119,14 @@ impl DbusNotifications {
             Err(e) => Err(e),
         };
         match result {
-            Ok(true) => Inhibition::On,
-            Ok(false) => Inhibition::Off,
+            Ok(true) => {
+                self.warned.store(false, Ordering::SeqCst);
+                Inhibition::On
+            }
+            Ok(false) => {
+                self.warned.store(false, Ordering::SeqCst);
+                Inhibition::Off
+            }
             Err(e) => {
                 self.warn_once(&format!("can't read {INTERFACE}.Inhibited"), &e);
                 Inhibition::Unknown
@@ -129,7 +145,7 @@ impl DbusNotifications {
 
     /// Yields when the server announces a property change or the service
     /// name changes hands (server restarted or gone).
-    async fn changes(&self) -> zbus::Result<impl Stream<Item = ()> + 'static> {
+    async fn changes(&self) -> zbus::Result<impl Stream<Item = Change> + 'static> {
         let connection = self.connection().await?;
         let properties = zbus::fdo::PropertiesProxy::builder(connection)
             .destination(SERVICE)
@@ -143,7 +159,7 @@ impl DbusNotifications {
                 .await?
                 .filter_map(|signal| async move {
                     let args = signal.args().ok()?;
-                    (args.interface_name().as_str() == INTERFACE).then_some(())
+                    (args.interface_name().as_str() == INTERFACE).then_some(Change::Property)
                 });
         let owners = self
             .proxy()
@@ -151,7 +167,7 @@ impl DbusNotifications {
             .inner()
             .receive_owner_changed()
             .await?
-            .map(|_| ());
+            .map(|_| Change::Owner);
         Ok(stream::select(changed, owners))
     }
 
@@ -164,7 +180,11 @@ impl DbusNotifications {
                     loop {
                         tokio::select! {
                             next = changes.next() => match next {
-                                Some(()) => self.refresh().await,
+                                Some(Change::Owner) => {
+                                    self.generation.fetch_add(1, Ordering::SeqCst);
+                                    self.refresh().await;
+                                }
+                                Some(Change::Property) => self.refresh().await,
                                 None => break,
                             },
                             () = tokio::time::sleep(SAFETY_POLL) => self.refresh().await,
@@ -185,6 +205,10 @@ impl DbusNotifications {
 impl NotificationsPort for DbusNotifications {
     fn inhibition(&self) -> watch::Receiver<Inhibition> {
         self.state.subscribe()
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
     }
 
     async fn inhibit(&self) -> Result<u32, String> {
