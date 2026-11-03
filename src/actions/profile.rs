@@ -1,4 +1,4 @@
-use super::{Control, Instances, is_choices_request};
+use super::{Control, Instances, is_choices_request, render_each};
 use crate::controller::Controller;
 use crate::cycle::step_in;
 use crate::dispatch::{self, Confirm, Dispatcher, Job};
@@ -144,14 +144,15 @@ impl ProfileAction {
     /// many controls show it.
     async fn render_all(&self) {
         let mut active: HashMap<String, Option<String>> = HashMap::new();
-        for (control, settings) in self.shared.instances.snapshot() {
+        render_each(&self.shared.instances, |control, settings| {
             let device = target_device(&settings, &control.device);
             let profile = active
                 .entry(device)
                 .or_insert_with_key(|device| self.active_profile(device))
                 .clone();
-            self.show(&control, &settings, profile).await;
-        }
+            async move { self.show(&control, &settings, profile).await }
+        })
+        .await;
     }
 
     async fn run_watcher(self, mut changes: watch::Receiver<u64>) {
