@@ -5,8 +5,10 @@ mod changes;
 mod controller;
 mod cycle;
 mod dispatch;
+mod dnd;
 mod host;
 mod lenient;
+mod notifications;
 mod opendeck_state;
 mod pending;
 mod platform;
@@ -21,6 +23,7 @@ mod pi_pages;
 use actions::audio::AudioAction;
 use actions::brightness::BrightnessAction;
 use actions::brightness::GlobalSettingsStore;
+use actions::dnd::DndAction;
 use actions::profile::ProfileAction;
 use async_trait::async_trait;
 use host::{Host, OpenDeckHost};
@@ -60,7 +63,14 @@ async fn main() -> OpenActionResult<()> {
     );
     register_action(brightness.clone()).await;
     set_global_event_handler(Box::leak(Box::new(GlobalEvents { brightness })));
-    register_action(ProfileAction::start(deck_state, deck_changes, host, ui)).await;
+    register_action(ProfileAction::start(
+        deck_state,
+        deck_changes,
+        host,
+        ui.clone(),
+    ))
+    .await;
+    register_action(DndAction::start(platform::notifications(), ui)).await;
 
     let result = tokio::select! {
         result = run(std::env::args().collect()) => result,

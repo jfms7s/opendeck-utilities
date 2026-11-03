@@ -1,11 +1,11 @@
 # CLAUDE.md
 
 OpenDeck plugin (`com.jfms7s.utilities`, Rust on the `openaction` crate; Linux
-x86_64 and Apple Silicon macOS) with three actions: Audio (`pactl` on Linux,
+x86_64 and Apple Silicon macOS) with four actions: Audio (`pactl` on Linux,
 CoreAudio on macOS), Device Brightness and Switch Profile (`opendeck
---process-message`). Design docs, plans, reviews and issue write-ups live in the
-Obsidian vault at `~/git/obsidian-vault/personal/projects/opendeck-utilities/`, not
-in this repo.
+--process-message`), and Do Not Disturb (session D-Bus, Linux only). Design docs,
+plans, reviews and issue write-ups live in the Obsidian vault at
+`~/git/obsidian-vault/personal/projects/opendeck-utilities/`, not in this repo.
 
 ## Checks
 
@@ -30,6 +30,9 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
   macOS-only code `cfg(target_os = "macos")`; keep both targets clippy-clean.
 - `src/audio/backend.rs` (the `AudioBackend` contract) and `src/audio/model.rs` (the
   snapshot types) are backend-neutral: no backend's code goes there.
+- `src/notifications/dbus.rs` is the only code that talks to the session bus for
+  Do Not Disturb; all D-Bus code and `zbus` are `cfg(target_os = "linux")`. Its tests
+  run a private `dbus-daemon` (`src/notifications/test_bus.rs`), never the real bus.
 - Platform-specific helpers live in `src/platform.rs` (backends in their own folders);
   logic that must be tested for both platforms takes the platform as a parameter
   (`platform::MACOS`).

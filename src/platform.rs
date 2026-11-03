@@ -5,6 +5,7 @@
 //! compiled out, so Linux tests cover the macOS branch.
 
 use crate::audio::backend::AudioBackend;
+use crate::notifications::NotificationsPort;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,6 +18,15 @@ pub fn audio_backend() -> Arc<dyn AudioBackend> {
     return Arc::new(crate::audio::coreaudio::CoreAudioBackend::default());
     #[cfg(not(target_os = "macos"))]
     return Arc::new(crate::audio::pactl::PactlBackend);
+}
+
+/// The desktop's notification inhibition: the session bus on Linux;
+/// nothing elsewhere (the Do Not Disturb key says "Linux only").
+pub fn notifications() -> Arc<dyn NotificationsPort> {
+    #[cfg(target_os = "linux")]
+    return crate::notifications::dbus::DbusNotifications::start(None);
+    #[cfg(not(target_os = "linux"))]
+    return Arc::new(crate::notifications::Unsupported::default());
 }
 
 /// The executable of the process that started the plugin (normally OpenDeck).

@@ -40,6 +40,8 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml ($cargo_version) and manifest.json ($manifest_version)"
             exit 1
           fi
+      - name: Install dbus-daemon (the D-Bus tests run a private bus)
+        run: command -v dbus-daemon || { sudo apt-get update && sudo apt-get install -y dbus-daemon; }
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked

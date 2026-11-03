@@ -1,7 +1,7 @@
 # OpenDeck Utilities
 
-An [OpenDeck](https://github.com/nekename/OpenDeck) plugin with three
-customizable actions for keys and dials:
+An [OpenDeck](https://github.com/nekename/OpenDeck) plugin with customizable
+actions for keys and dials:
 
 - **Audio** - volume, mute and device switching for the default output, the
   default input (mic), a specific device, an application's streams, or all
@@ -28,6 +28,13 @@ customizable actions for keys and dials:
   profiles on the touch strip and switches on press. A strip tap switches to the
   highlighted profile, or goes to the previous/next one on the left/right half if
   chosen; holding the strip switches to the first profile in the dial's list.
+- **Do Not Disturb** (keys, Linux only) - silences desktop notifications through
+  the notification server's inhibit API (`org.freedesktop.Notifications`, e.g.
+  Plasma) and shows "On" whenever notifications are silenced, whoever did it. A
+  press turns the plugin's own silencing on or off; when the desktop's own Do Not
+  Disturb is on ("by desktop"), a press can't lift it and alerts instead. The
+  silencing ends when the plugin exits. Notification servers without the inhibit
+  API (GNOME's) show "Unavailable"; on macOS the key shows "Linux only".
 
 ## Requirements
 
@@ -175,6 +182,15 @@ maintainer's project notes (kept outside this repository), which the release not
 - [ ] Holding a finger on the strip switches to the first profile in the dial's
       list. With "Touch strip tap" set to the half step, tapping the right half
       switches to the next profile at once and the left half to the previous one.
+
+**Do Not Disturb** (key, Linux)
+
+- [ ] Pressing the key shows "On"; `notify-send test` then shows no popup. Pressing
+      again shows "Off" and `notify-send test` pops up.
+- [ ] Turning on Plasma's own Do Not Disturb makes the key show "On · by desktop"
+      within a second; a press alerts and changes nothing.
+- [ ] With the key "On", quitting OpenDeck ends the silencing: `notify-send test`
+      pops up again.
 
 **Flatpak OpenDeck** (optional; run when a Flatpak OpenDeck is available, e.g. in a VM)
 
