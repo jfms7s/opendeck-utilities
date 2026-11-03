@@ -18,8 +18,8 @@ const PAUSED_COLOR: &str = "#6b7280";
 
 pub fn strip_feedback(view: &NowPlayingView) -> Value {
     json!({
-        "title": shorten(&view.title, 22),
-        "artist": shorten(&view.artist, 28),
+        "title": shorten(&view.title, 16),
+        "artist": shorten(&view.artist, 24),
         "bar": {
             "value": view.progress.clamp(0.0, 100.0),
             "bar_fill_c": if view.playing { PLAYING_COLOR } else { PAUSED_COLOR },
