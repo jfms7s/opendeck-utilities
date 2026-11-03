@@ -6,6 +6,7 @@
 pub mod audio;
 pub mod brightness;
 pub mod dnd;
+pub mod media;
 pub mod profile;
 
 use crate::controller::Controller;
@@ -129,6 +130,7 @@ mod tests {
             <audio::AudioAction as Action>::UUID,
             <brightness::BrightnessAction as Action>::UUID,
             <dnd::DndAction as Action>::UUID,
+            <media::MediaAction as Action>::UUID,
             <profile::ProfileAction as Action>::UUID,
         ];
         registered.sort();

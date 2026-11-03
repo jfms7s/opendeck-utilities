@@ -3,8 +3,9 @@
 
 use super::NotificationsPort;
 use super::dbus::DbusNotifications;
-use super::test_bus::{PrivateBus, serve_notifications};
+use super::fake_server::serve_notifications;
 use crate::dnd::Inhibition;
+use crate::test_bus::PrivateBus;
 use std::time::Duration;
 use tokio::sync::watch;
 

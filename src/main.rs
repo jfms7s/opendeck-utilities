@@ -8,6 +8,7 @@ mod dispatch;
 mod dnd;
 mod host;
 mod lenient;
+mod media;
 mod notifications;
 mod opendeck_state;
 mod pending;
@@ -15,6 +16,8 @@ mod platform;
 mod profile;
 mod render;
 mod schedule;
+#[cfg(all(test, target_os = "linux"))]
+mod test_bus;
 mod ui;
 
 #[cfg(test)]
@@ -24,6 +27,7 @@ use actions::audio::AudioAction;
 use actions::brightness::BrightnessAction;
 use actions::brightness::GlobalSettingsStore;
 use actions::dnd::DndAction;
+use actions::media::MediaAction;
 use actions::profile::ProfileAction;
 use async_trait::async_trait;
 use host::{Host, OpenDeckHost};
@@ -70,7 +74,8 @@ async fn main() -> OpenActionResult<()> {
         ui.clone(),
     ))
     .await;
-    register_action(DndAction::start(platform::notifications(), ui)).await;
+    register_action(DndAction::start(platform::notifications(), ui.clone())).await;
+    register_action(MediaAction::start(platform::media(), ui)).await;
 
     let result = tokio::select! {
         result = run(std::env::args().collect()) => result,

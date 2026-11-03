@@ -5,6 +5,7 @@
 //! compiled out, so Linux tests cover the macOS branch.
 
 use crate::audio::backend::AudioBackend;
+use crate::media::MediaPort;
 use crate::notifications::NotificationsPort;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +28,15 @@ pub fn notifications() -> Arc<dyn NotificationsPort> {
     return crate::notifications::dbus::DbusNotifications::start(None);
     #[cfg(not(target_os = "linux"))]
     return Arc::new(crate::notifications::Unsupported::default());
+}
+
+/// MPRIS media players: the session bus on Linux; nothing elsewhere (the
+/// Media dial says "Linux only").
+pub fn media() -> Arc<dyn MediaPort> {
+    #[cfg(target_os = "linux")]
+    return crate::media::mpris::MprisMedia::start(None);
+    #[cfg(not(target_os = "linux"))]
+    return Arc::new(crate::media::Unsupported::default());
 }
 
 /// The executable of the process that started the plugin (normally OpenDeck).
