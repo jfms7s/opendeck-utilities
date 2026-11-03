@@ -35,6 +35,12 @@ actions for keys and dials:
   Disturb is on ("by desktop"), a press can't lift it and alerts instead. The
   silencing ends when the plugin exits. Notification servers without the inhibit
   API (GNOME's) show "Unavailable"; on macOS the key shows "Linux only".
+- **Media** (dials, Linux only) - now playing from MPRIS players (Spotify,
+  browsers, mpv, …): the touch strip shows the track's title, artist and progress.
+  Rotating seeks 5 s per detent, pressing plays or pauses, tapping the strip skips
+  to the next track. The dial follows the playing player (the one it already
+  followed if several play), else the one it followed last, else the first by name;
+  with no player it shows "Nothing playing". On macOS it shows "Linux only".
 
 ## Requirements
 
@@ -191,6 +197,13 @@ maintainer's project notes (kept outside this repository), which the release not
       within a second; a press alerts and changes nothing.
 - [ ] With the key "On", quitting OpenDeck ends the silencing: `notify-send test`
       pops up again.
+
+**Media** (dial, Linux)
+
+- [ ] With a track playing (e.g. Spotify or a browser video), the strip shows its
+      title, artist and a progress bar that moves. Rotating seeks; pressing pauses
+      ("paused · …") and plays again; tapping the strip skips to the next track.
+- [ ] With every player closed, the strip shows "Nothing playing".
 
 **Flatpak OpenDeck** (optional; run when a Flatpak OpenDeck is available, e.g. in a VM)
 

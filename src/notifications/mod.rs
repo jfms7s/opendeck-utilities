@@ -8,7 +8,7 @@ pub mod dbus;
 #[cfg(all(test, target_os = "linux"))]
 mod dbus_tests;
 #[cfg(all(test, target_os = "linux"))]
-pub mod test_bus;
+mod fake_server;
 
 use crate::dnd::Inhibition;
 use async_trait::async_trait;

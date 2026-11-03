@@ -42,6 +42,15 @@
 			"States": [{ "Image": "icons/dndKey" }]
 		},
 		{
+			"UUID": "com.jfms7s.utilities.media",
+			"Name": "Media",
+			"Icon": "icons/media",
+			"Tooltip": "Now playing on the touch strip: rotate to seek, press to play or pause, tap for the next track (Linux only)",
+			"Controllers": ["Encoder"],
+			"States": [{ "Image": "icons/media" }],
+			"Encoder": { "layout": "layouts/now-playing.json" }
+		},
+		{
 			"UUID": "com.jfms7s.utilities.profile",
 			"Name": "Switch Profile",
 			"Icon": "icons/profile",
