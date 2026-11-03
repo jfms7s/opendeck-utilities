@@ -1,8 +1,8 @@
 //! CoreAudio (HAL) state as plain data, and its conversion into the shared
 //! `Snapshot`. Platform-neutral so it is tested everywhere; only
-//! `coreaudio.rs` (macOS) reads the real HAL.
+//! `backend.rs` (macOS) reads the real HAL.
 
-use super::model::{Capabilities, Device, Snapshot};
+use crate::audio::model::{Capabilities, Device, Snapshot};
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 

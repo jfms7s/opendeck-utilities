@@ -70,7 +70,7 @@ mod tests {
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
         assert_eq!(c["capabilities"]["perApp"], true);
         assert_eq!(c["capabilities"]["unsupportedNote"], "");
-        snap.caps = crate::audio::hal::CAPABILITIES;
+        snap.caps = crate::audio::coreaudio::hal::CAPABILITIES;
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
         assert_eq!(c["capabilities"]["perApp"], false);
         assert_eq!(
@@ -84,7 +84,7 @@ mod tests {
         let mut snap = fixture_snapshot();
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
         assert_eq!(c["capabilities"]["volumeCap"], Value::Null);
-        snap.caps = crate::audio::hal::CAPABILITIES;
+        snap.caps = crate::audio::coreaudio::hal::CAPABILITIES;
         let c = choices(&snap, &AudioSettings::default(), Controller::Keypad, None);
         assert_eq!(c["capabilities"]["volumeCap"], 100);
     }

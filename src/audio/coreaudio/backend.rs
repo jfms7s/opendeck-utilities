@@ -3,9 +3,9 @@
 //! There is no public API for another process's volume or output device,
 //! so per-app streams are not supported here.
 
-use super::backend::{AudioBackend, BackendError, Mute, Node};
 use super::hal::{self, Controls, HalDevice};
-use super::model::{DeviceKind, Snapshot};
+use crate::audio::backend::{AudioBackend, BackendError, Mute, Node};
+use crate::audio::model::{DeviceKind, Snapshot};
 use crate::changes::bump;
 use async_trait::async_trait;
 use hal::POLL;

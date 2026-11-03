@@ -2,11 +2,14 @@
 //! through a shell), and every name argument is checked by `is_safe_name`
 //! first: pactl parses options anywhere on its command line, so a
 //! free-text name like `--server=x` would otherwise be taken as an option.
-// macOS uses CoreAudio (`coreaudio.rs`); the pactl code still builds and
+// macOS uses CoreAudio (`coreaudio/`); the pactl code still builds and
 // is tested there, but nothing calls it.
 #![cfg_attr(target_os = "macos", allow(dead_code))]
 
-use super::model::{self, DeviceKind, ParseError, Snapshot};
+pub mod parse;
+
+use super::backend::{AudioBackend, BackendError, Mute, Node};
+use super::model::{Capabilities, DeviceKind, Snapshot};
 use crate::changes::bump;
 use async_trait::async_trait;
 use std::process::Stdio;
@@ -19,71 +22,8 @@ const PACTL: &str = "pactl";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Node {
-    Sink(String),
-    Source(String),
-    SinkInput(u32),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mute {
-    On,
-    Off,
-    Toggle,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum BackendError {
-    /// The backend's tool (named) is missing.
-    #[error("{0} not found")]
-    NotInstalled(&'static str),
-    #[error("pactl {args} failed: {stderr}")]
-    Failed { args: String, stderr: String },
-    /// The backend's tool (named) didn't answer in time.
-    #[error("{0} timed out")]
-    Timeout(&'static str),
-    #[error(transparent)]
-    Parse(#[from] ParseError),
-    #[error("nothing to act on")]
-    NoTarget,
-    #[error("refusing unsafe name {0:?}")]
-    UnsafeName(String),
-    #[error("io: {0}")]
-    Io(std::io::Error),
-    /// The platform can't do this (macOS: per-app audio, a device without
-    /// a volume or mute control).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    #[error("{0}")]
-    Unsupported(String),
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    #[error("CoreAudio: {0}")]
-    CoreAudio(String),
-}
-
-impl BackendError {
-    /// The few words a tile has room for: the missing tool by name (the
-    /// one error a user can fix), "audio error" for everything else.
-    pub fn short(&self) -> String {
-        match self {
-            BackendError::NotInstalled(tool) => format!("{tool} not found"),
-            _ => "audio error".to_string(),
-        }
-    }
-}
-
-/// The audio system: read it, change it, and hear about changes made
-/// anywhere (so a second backend or a test fake comes as one object).
-#[async_trait]
-pub trait AudioBackend: Send + Sync {
-    async fn snapshot(&self) -> Result<Snapshot, BackendError>;
-    async fn set_volume(&self, node: &Node, percent: u16) -> Result<(), BackendError>;
-    async fn set_mute(&self, node: &Node, mute: Mute) -> Result<(), BackendError>;
-    async fn set_default(&self, kind: DeviceKind, name: &str) -> Result<(), BackendError>;
-    async fn move_stream(&self, stream: u32, sink: &str) -> Result<(), BackendError>;
-    /// Starts reporting changes: bumps `tx` on every relevant change.
-    fn subscribe(&self, tx: watch::Sender<u64>);
-}
+/// `pactl` on PipeWire/PulseAudio: per-app streams, volume up to 150.
+pub const CAPABILITIES: Capabilities = Capabilities::FULL;
 
 pub fn is_safe_name(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('-') && !name.contains('\0')
@@ -302,7 +242,7 @@ impl AudioBackend for PactlBackend {
         let inputs = or_empty(inputs, "app streams");
         // Likewise recorders only add the "app is recording" hint.
         let outputs = or_empty(outputs, "recorders");
-        Ok(model::build_snapshot(
+        Ok(parse::build_snapshot(
             &info?, &sinks?, &sources?, &inputs, &outputs,
         )?)
     }
