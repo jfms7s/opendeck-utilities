@@ -74,7 +74,7 @@ fn inactive(settings: &AudioSettings, label: &str, status: &str) -> LevelView {
 /// `recorders`: the apps recording from the target's input(s)
 /// (`target::recorders_for`). While any records, the title names them in
 /// place of the label, muted or not: the point is knowing who has the mic.
-/// `cap`: the backend's volume cap (`Snapshot::volume_cap`), so a device at
+/// `cap`: the backend's volume cap (`Capabilities::volume_cap`), so a device at
 /// the cap shows a full bar.
 pub fn audio_view(
     resolved: &Resolved,
@@ -334,7 +334,7 @@ mod tests {
     /// looks at inputs).
     #[test]
     fn an_output_shows_nothing_for_a_monitor_recorder() {
-        let snap = crate::audio::model::build_snapshot(
+        let snap = crate::audio::pactl::parse::build_snapshot(
             include_str!("fixtures/info.json"),
             include_str!("fixtures/sinks.json"),
             include_str!("fixtures/sources.json"),

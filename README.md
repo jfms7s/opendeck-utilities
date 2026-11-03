@@ -1,7 +1,7 @@
 # OpenDeck Utilities
 
-An [OpenDeck](https://github.com/nekename/OpenDeck) plugin with three
-customizable actions for keys and dials:
+An [OpenDeck](https://github.com/nekename/OpenDeck) plugin with customizable
+actions for keys and dials:
 
 - **Audio** - volume, mute and device switching for the default output, the
   default input (mic), a specific device, an application's streams, or all
@@ -21,10 +21,26 @@ customizable actions for keys and dials:
 - **Device Brightness** - dial steps brightness and press toggles between two
   presets; a strip tap toggles too, or steps down/up on the left/right half if
   chosen; holding the strip toggles. A key can increase, decrease, set or toggle.
+  An optional plugin-wide schedule (two local times, each with a brightness)
+  dims the deck at night and restores it in the morning, whatever profile is
+  shown; a change made in between is kept until the next scheduled time.
 - **Switch Profile** - a key jumps to a profile; a dial scrolls a list of
   profiles on the touch strip and switches on press. A strip tap switches to the
   highlighted profile, or goes to the previous/next one on the left/right half if
   chosen; holding the strip switches to the first profile in the dial's list.
+- **Do Not Disturb** (keys, Linux only) - silences desktop notifications through
+  the notification server's inhibit API (`org.freedesktop.Notifications`, e.g.
+  Plasma) and shows "On" whenever notifications are silenced, whoever did it. A
+  press turns the plugin's own silencing on or off; when the desktop's own Do Not
+  Disturb is on ("by desktop"), a press can't lift it and alerts instead. The
+  silencing ends when the plugin exits. Notification servers without the inhibit
+  API (GNOME's) show "Unavailable"; on macOS the key shows "Linux only".
+- **Media** (dials, Linux only) - now playing from MPRIS players (Spotify,
+  browsers, mpv, …): the touch strip shows the track's title, artist and progress.
+  Rotating seeks 5 s per detent, pressing plays or pauses, tapping the strip skips
+  to the next track. The dial follows the playing player (the one it already
+  followed if several play), else the one it followed last, else the first by name;
+  with no player it shows "Nothing playing". On macOS it shows "Linux only".
 
 ## Requirements
 
@@ -129,6 +145,8 @@ maintainer's project notes (kept outside this repository), which the release not
       while turning it changes the volume and does not switch device on release.
 - [ ] With Maximum volume at 100%, rotating up stops at 100%; at 150%, it goes past
       100%.
+- [ ] Editing only the Label of a new dial keeps its default gestures (press toggles
+      mute, long press switches device).
 - [ ] The input dial shows a mic icon and follows the system's default source; a press
       toggles its mute. With Press set to "Push to talk (hold)", holding the dial
       unmutes the mic and releasing mutes it again; switching profile while holding it
@@ -156,6 +174,10 @@ maintainer's project notes (kept outside this repository), which the release not
 - [ ] With "Touch strip tap" set to the half step, tapping the left half of the
       dial's strip lowers the brightness by the step and the right half raises it;
       holding the strip toggles between the presets.
+- [ ] A schedule time two minutes ahead (Schedule card) sets the brightness at that
+      minute, also with another profile shown; turning the dial afterwards is not
+      undone; restarting OpenDeck between the two times re-applies the earlier
+      time's value at start-up.
 
 **Switch Profile** (dial)
 
@@ -166,6 +188,22 @@ maintainer's project notes (kept outside this repository), which the release not
 - [ ] Holding a finger on the strip switches to the first profile in the dial's
       list. With "Touch strip tap" set to the half step, tapping the right half
       switches to the next profile at once and the left half to the previous one.
+
+**Do Not Disturb** (key, Linux)
+
+- [ ] Pressing the key shows "On"; `notify-send test` then shows no popup. Pressing
+      again shows "Off" and `notify-send test` pops up.
+- [ ] Turning on Plasma's own Do Not Disturb makes the key show "On · by desktop"
+      within a second; a press alerts and changes nothing.
+- [ ] With the key "On", quitting OpenDeck ends the silencing: `notify-send test`
+      pops up again.
+
+**Media** (dial, Linux)
+
+- [ ] With a track playing (e.g. Spotify or a browser video), the strip shows its
+      title, artist and a progress bar that moves. Rotating seeks; pressing pauses
+      ("paused · …") and plays again; tapping the strip skips to the next track.
+- [ ] With every player closed, the strip shows "Nothing playing".
 
 **Flatpak OpenDeck** (optional; run when a Flatpak OpenDeck is available, e.g. in a VM)
 

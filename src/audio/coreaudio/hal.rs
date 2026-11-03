@@ -1,9 +1,9 @@
 //! CoreAudio (HAL) state as plain data, and its conversion into the shared
 //! `Snapshot`. Platform-neutral so it is tested everywhere; only
-//! `coreaudio.rs` (macOS) reads the real HAL.
+//! `backend.rs` (macOS) reads the real HAL.
 
-use super::model::{Device, Snapshot};
-use std::collections::BTreeSet;
+use crate::audio::model::{Capabilities, Device, Snapshot};
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 /// Without property listeners, `subscribe` re-reads the HAL this often to
@@ -12,6 +12,14 @@ pub const POLL: Duration = Duration::from_millis(500);
 /// With listeners, changes arrive as callbacks; this slow re-read is only a
 /// safety net for a missed one.
 pub const SAFETY_POLL: Duration = Duration::from_secs(10);
+
+/// CoreAudio has no per-app streams and no boost above 100 %.
+pub const CAPABILITIES: Capabilities = Capabilities {
+    per_app: false,
+    volume_cap: Some(100),
+    unsupported_label: "not on macOS",
+    unsupported_note: "not supported on macOS",
+};
 
 /// `kAudioHardwarePropertyDevices` (`'dev#'`): the system object's device
 /// list. Own copies of the selectors so the routing below is tested on
@@ -221,9 +229,27 @@ pub fn build_snapshot(
         streams: Vec::new(),
         // No app names for the mic on macOS (Linux only in v1).
         recorders: Vec::new(),
-        apps_unsupported: true,
-        volume_cap: Some(100),
+        caps: CAPABILITIES,
     }
+}
+
+/// Each device's `AudioObjectID` by UID, so a write finds its device
+/// without enumerating the HAL. Rebuilt from every full device read.
+pub fn ids_by_uid(devices: &[HalDevice]) -> HashMap<String, u32> {
+    devices.iter().map(|d| (d.uid.clone(), d.id)).collect()
+}
+
+/// Records `now` as the last snapshot this backend handed out or saw, and
+/// says whether it differs from the one before (the first one does). Both
+/// the action's reads and the safety re-read go through here, so the
+/// re-read doesn't report a change the action has already read (one
+/// refresh per write, not two).
+pub fn record(last: &mut Option<Snapshot>, now: Snapshot) -> bool {
+    if last.as_ref() == Some(&now) {
+        return false;
+    }
+    *last = Some(now);
+    true
 }
 
 #[cfg(test)]
@@ -291,8 +317,8 @@ mod tests {
         assert_eq!(snap.default_name(DeviceKind::Output), "headset");
         assert_eq!(snap.default_name(DeviceKind::Input), "mic");
         assert!(snap.streams.is_empty());
-        assert!(snap.apps_unsupported);
-        assert_eq!(snap.volume_cap, Some(100));
+        assert!(!snap.caps.per_app);
+        assert_eq!(snap.caps.volume_cap, Some(100));
         let headset_in = &snap.devices(DeviceKind::Input)[0];
         assert_eq!(
             (headset_in.index, headset_in.volume, headset_in.muted),
@@ -420,5 +446,32 @@ mod tests {
     fn an_unknown_default_id_names_no_device() {
         let snap = build_snapshot(&[device(10, "speakers", 2, 0)], Some(99), None);
         assert_eq!(snap.default_name(DeviceKind::Output), "");
+    }
+
+    #[test]
+    fn devices_are_found_by_uid() {
+        let devices = [device(11, "headset", 2, 1), device(12, "mic", 0, 1)];
+        let ids = ids_by_uid(&devices);
+        assert_eq!(ids.get("headset"), Some(&11));
+        assert_eq!(ids.get("mic"), Some(&12));
+        assert_eq!(ids.get("gone"), None);
+    }
+
+    /// Performance review: a write made the action re-read (via `written`)
+    /// and then the safety re-read found the same change and bumped again.
+    #[test]
+    fn a_change_the_action_already_read_is_not_reported_again() {
+        let mut last = None;
+        let before = build_snapshot(&[device(11, "headset", 2, 1)], Some(11), None);
+        assert!(record(&mut last, before.clone()), "the first read counts");
+        assert!(!record(&mut last, before.clone()));
+        let mut after = before.clone();
+        after.sinks[0].volume = 40;
+        // The action's re-read after the write records it ...
+        assert!(record(&mut last, after.clone()));
+        // ... so the safety re-read that finds the same state doesn't bump.
+        assert!(!record(&mut last, after));
+        // An outside change after that still does.
+        assert!(record(&mut last, before));
     }
 }

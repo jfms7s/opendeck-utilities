@@ -1,15 +1,23 @@
 mod actions;
 mod audio;
 mod brightness;
+mod changes;
 mod controller;
 mod cycle;
 mod dispatch;
+mod dnd;
 mod host;
 mod lenient;
+mod media;
+mod notifications;
 mod opendeck_state;
 mod pending;
+mod platform;
 mod profile;
 mod render;
+mod schedule;
+#[cfg(all(test, target_os = "linux"))]
+mod test_bus;
 mod ui;
 
 #[cfg(test)]
@@ -17,25 +25,24 @@ mod pi_pages;
 
 use actions::audio::AudioAction;
 use actions::brightness::BrightnessAction;
+use actions::brightness::GlobalSettingsStore;
+use actions::dnd::DndAction;
+use actions::media::MediaAction;
 use actions::profile::ProfileAction;
-use audio::backend::AudioBackend;
+use async_trait::async_trait;
 use host::{Host, OpenDeckHost};
+use openaction::global_events::{
+    DidReceiveGlobalSettingsEvent, GlobalEventHandler, set_global_event_handler,
+};
 use openaction::{OpenActionResult, register_action, run};
 use opendeck_state::OpenDeckState;
+use schedule::{Schedule, SystemClock};
 use std::sync::Arc;
 use std::time::Duration;
 use ui::{OpenDeckUi, Ui};
 
 // Two workers are plenty for a handful of controls (performance review);
 // nothing here blocks a worker for long.
-/// CoreAudio on macOS, `pactl` (PipeWire/PulseAudio) elsewhere.
-fn audio_backend() -> Arc<dyn AudioBackend> {
-    #[cfg(target_os = "macos")]
-    return Arc::new(audio::coreaudio::CoreAudioBackend::default());
-    #[cfg(not(target_os = "macos"))]
-    return Arc::new(audio::backend::PactlBackend);
-}
-
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> OpenActionResult<()> {
     simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())
@@ -48,16 +55,27 @@ async fn main() -> OpenActionResult<()> {
     let deck_state = OpenDeckState::discover();
     let deck_changes = opendeck_state::spawn_watcher(deck_state.clone());
 
-    let audio = AudioAction::start(audio_backend(), ui.clone());
+    let audio = AudioAction::start(platform::audio_backend(), ui.clone());
     register_action(audio.clone()).await;
-    register_action(BrightnessAction::start(
+    let brightness = BrightnessAction::start(
         deck_state.clone(),
         deck_changes.clone(),
         host.clone(),
         ui.clone(),
+        Arc::new(SystemClock),
+        Arc::new(GlobalSettingsStore),
+    );
+    register_action(brightness.clone()).await;
+    set_global_event_handler(Box::leak(Box::new(GlobalEvents { brightness })));
+    register_action(ProfileAction::start(
+        deck_state,
+        deck_changes,
+        host,
+        ui.clone(),
     ))
     .await;
-    register_action(ProfileAction::start(deck_state, deck_changes, host, ui)).await;
+    register_action(DndAction::start(platform::notifications(), ui.clone())).await;
+    register_action(MediaAction::start(platform::media(), ui)).await;
 
     let result = tokio::select! {
         result = run(std::env::args().collect()) => result,
@@ -75,6 +93,29 @@ async fn main() -> OpenActionResult<()> {
         Err(_) => log::warn!("push-to-talk re-mute on exit timed out"),
     }
     result
+}
+
+/// Plugin-wide settings: the brightness schedule, read once connected and
+/// whenever OpenDeck sends them.
+struct GlobalEvents {
+    brightness: BrightnessAction,
+}
+
+#[async_trait]
+impl GlobalEventHandler for GlobalEvents {
+    async fn plugin_ready(&self) -> OpenActionResult<()> {
+        openaction::get_global_settings().await
+    }
+
+    async fn did_receive_global_settings(
+        &self,
+        event: DidReceiveGlobalSettingsEvent,
+    ) -> OpenActionResult<()> {
+        self.brightness
+            .load_schedule(Schedule::from_global(&event.payload.settings))
+            .await;
+        Ok(())
+    }
 }
 
 /// How long exit waits for the push-to-talk re-mute.
@@ -116,8 +157,8 @@ mod tests {
         assert_eq!(manifest["Version"], env!("CARGO_PKG_VERSION"));
     }
 
-    /// `build.mjs` names each binary after `CodePaths`; the Linux default must
-    /// be one of them.
+    /// `build.mjs` names each binary after `CodePaths`; `CodePathLin` and
+    /// `CodePathMac` must each be one of them.
     #[test]
     fn manifest_code_paths_name_the_built_binaries() {
         let manifest: serde_json::Value =

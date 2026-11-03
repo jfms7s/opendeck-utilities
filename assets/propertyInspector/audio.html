@@ -149,29 +149,30 @@
 			},
 		});
 
-		// macOS has no per-app audio: keep the option (a saved App control
-		// still shows what it is) but disable it and say why.
+		// A backend without per-app audio (macOS): keep the option (a saved
+		// App control still shows what it is) but disable it and say why.
 		function markAppSupport() {
 			const option = byId("target").querySelector('option[value="app"]');
-			const supported = choices.appsSupported !== false;
-			option.disabled = !supported;
-			option.textContent = supported ? "Application" : "Application (not supported on macOS)";
+			const { appOption } = PI.applyCapabilities(choices.capabilities);
+			option.disabled = appOption.disabled;
+			option.textContent = appOption.label;
 		}
 
-		// macOS caps volume at 100 %: keep the higher Maximum volume options
-		// (a saved control still shows what it was) but disable them.
+		// A backend volume cap (100 % on macOS): keep the higher Maximum volume
+		// options (a saved control still shows what it was) but disable them.
 		function markVolumeCap() {
+			const { volumeCap } = PI.applyCapabilities(choices.capabilities);
 			for (const option of byId("max_volume").options) {
 				const value = Number(option.value);
 				option.disabled = value > volumeBounds("max_volume")[1];
-				option.textContent = option.disabled ? `${value}% (max ${choices.volumeCap}% here)` : `${value}%`;
+				option.textContent = option.disabled ? `${value}% (max ${volumeCap}% here)` : `${value}%`;
 			}
 		}
 
 		/** A volume setting's bounds, its upper end lowered to the backend's cap. */
 		function volumeBounds(name) {
 			const [min, max] = DEFAULTS.bounds[name];
-			return [min, PI.volumeLimit(choices?.volumeCap, max)];
+			return [min, PI.applyCapabilities(choices?.capabilities, max).volumeLimit];
 		}
 
 		function gestureValue(slot) {
@@ -304,13 +305,22 @@
 		}
 
 		function collect() {
-			const d = DEFAULTS.settings;
 			const boxes = Array.from(document.querySelectorAll("#cycle_devices input"));
+			const shown = SLOTS.map(([slot]) => slot).filter((slot) => field(slot, "op"));
+			const numbers = PI.audioNumbers(
+				{
+					step: byId("step").value,
+					max_volume: byId("max_volume").value,
+					gesture_volumes: Object.fromEntries(shown.map((slot) => [slot, field(slot, "volume").value])),
+				},
+				DEFAULTS,
+				choices?.capabilities,
+			);
 			const next = {
 				target: byId("target").value,
 				target_name: byId("target_name").value.trim(),
-				step: PI.clampInt(byId("step").value, DEFAULTS.bounds.step, d.step),
-				max_volume: PI.clampInt(byId("max_volume").value, volumeBounds("max_volume"), d.max_volume),
+				step: numbers.step,
+				max_volume: numbers.max_volume,
 				rotate: byId("rotate").value,
 				label: byId("label").value,
 				accent: byId("accent").value,
@@ -328,11 +338,15 @@
 					if (settings[slot]) next[slot] = settings[slot];
 					continue;
 				}
-				next[slot] = {
+				const collected = {
 					op: select.value,
-					volume: PI.clampInt(field(slot, "volume").value, volumeBounds("gesture_volume"), DEFAULTS.gestures.Keypad.press.volume),
+					volume: numbers.gesture_volumes[slot],
 					device: field(slot, "device").value.trim(),
 				};
+				// A slot showing the controller's default stays unset.
+				const fallback = DEFAULTS.gestures[controller === "Keypad" ? "Keypad" : "Encoder"][slot];
+				const kept = PI.keepGesture(settings[slot], collected, fallback);
+				if (kept) next[slot] = kept;
 			}
 			return next;
 		}

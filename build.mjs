@@ -16,9 +16,9 @@ function fail(message) {
 	process.exit(1);
 }
 
-// Cargo.toml's [package] version and manifest.json's "Version" have nothing
-// keeping them in sync - catch drift here rather than shipping a plugin
-// whose crate version and Elgato-facing manifest version disagree.
+// Cargo.toml's [package] version and manifest.json's "Version" must agree.
+// Also checked by `cargo test` (`manifest_version_matches_cargo`); repeated
+// here so a stale local build fails before packaging.
 const cargoToml = readFileSync("Cargo.toml", "utf8");
 const cargoVersionMatch = cargoToml.match(/^version\s*=\s*"([^"]+)"/m);
 if (!cargoVersionMatch) fail('could not find `version = "..."` in Cargo.toml');

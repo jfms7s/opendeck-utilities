@@ -1,11 +1,11 @@
 # CLAUDE.md
 
 OpenDeck plugin (`com.jfms7s.utilities`, Rust on the `openaction` crate; Linux
-x86_64 and Apple Silicon macOS) with three actions: Audio (`pactl` on Linux,
+x86_64 and Apple Silicon macOS) with five actions: Audio (`pactl` on Linux,
 CoreAudio on macOS), Device Brightness and Switch Profile (`opendeck
---process-message`). Design docs, plans, reviews and issue write-ups live in the
-Obsidian vault at `~/git/obsidian-vault/personal/projects/opendeck-utilities/`, not
-in this repo.
+--process-message`), Do Not Disturb and Media (session D-Bus, Linux only).
+Design docs, plans, reviews and issue write-ups live in the Obsidian vault at
+`~/git/obsidian-vault/personal/projects/opendeck-utilities/`, not in this repo.
 
 ## Checks
 
@@ -20,14 +20,24 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
 
 ## Rules
 
-- `src/audio/backend.rs` is the only code that runs `pactl`. Every device name
+- `src/audio/pactl/` is the only code that runs `pactl`. Every device name
   goes through `is_safe_name`, and every `pactl` runs in the C locale
   (`pactl_command`). Long-lived children get `die_with_parent` (Linux-only:
   `PR_SET_PDEATHSIG`; a no-op elsewhere).
-- `src/audio/coreaudio.rs` (macOS only) is the only code that calls CoreAudio; pure
-  conversions live in `src/audio/hal.rs` so Linux tests cover them. macOS has no
-  per-app audio (`Snapshot::apps_unsupported`). Linux-only code is `cfg(target_os = "linux")`,
+- `src/audio/coreaudio/backend.rs` (macOS only) is the only code that calls CoreAudio; pure
+  conversions live in `src/audio/coreaudio/hal.rs` so Linux tests cover them. macOS has no
+  per-app audio (`Snapshot::caps`, `Capabilities::per_app`). Linux-only code is `cfg(target_os = "linux")`,
   macOS-only code `cfg(target_os = "macos")`; keep both targets clippy-clean.
+- `src/audio/backend.rs` (the `AudioBackend` contract) and `src/audio/model.rs` (the
+  snapshot types) are backend-neutral: no backend's code goes there.
+- `src/notifications/dbus.rs` (Do Not Disturb) and `src/media/mpris.rs` (MPRIS
+  players) are the only code that talks to the session bus; every call has a
+  timeout and none is awaited on the event loop. All D-Bus code and `zbus` are
+  `cfg(target_os = "linux")`. Their tests run a private `dbus-daemon`
+  (`src/test_bus.rs`, fakes next to each adapter), never the real bus.
+- Platform-specific helpers live in `src/platform.rs` (backends in their own folders);
+  logic that must be tested for both platforms takes the platform as a parameter
+  (`platform::MACOS`).
 - OpenDeck's config files are read, never written (`src/opendeck_state.rs`).
   Device ids are path components: check `is_safe_device_id` before joining.
 - Anything handed to another program is validated first: audio targets must exist

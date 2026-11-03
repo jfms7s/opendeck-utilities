@@ -46,7 +46,9 @@ process.stdout.write(`<!-- Written by the Release workflow. Before publishing: r
 Linux and on a Mac, tick what passed and mark the rest "fail" or "not run" with
 why, fill in the smoke log and run-on lines, delete the UNVERIFIED line, then
 delete this comment. -->
-Verify the download with \`sha256sum -c SHA256SUMS\` (macOS: \`shasum -a 256 -c SHA256SUMS\`).
+Verify the download with \`sha256sum -c SHA256SUMS\` (macOS: \`shasum -a 256 -c SHA256SUMS\`)
+and its build provenance with
+\`gh attestation verify opendeck-utilities.streamDeckPlugin --repo jfms7s/opendeck-utilities\`.
 
 ## Smoke test
 

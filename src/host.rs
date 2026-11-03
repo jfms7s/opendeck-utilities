@@ -5,6 +5,7 @@
 //! instance without that check. `crate::dispatch` sends through `Host` and
 //! confirms the effect by re-reading OpenDeck's state.
 
+use crate::platform::parent_exe;
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -12,7 +13,6 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -28,7 +28,6 @@ const HOST_TIMEOUT: Duration = Duration::from_secs(5);
 /// wakes the wait as soon as OpenDeck writes its files.
 const CONFIRM_RECHECK: Duration = Duration::from_millis(500);
 
-static WARNED_IGNORED: AtomicBool = AtomicBool::new(false);
 static WARNED_ONCE: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
 static LOGGED_PROGRAM: Once = Once::new();
 
@@ -84,10 +83,16 @@ where
     match process_message(program, &event).await {
         Ok(()) => Ok(()),
         Err(why) => {
-            log::warn!(
-                "{} --process-message failed ({why}); sending over the websocket instead",
+            log::debug!(
+                "{} --process-message failed ({why}); sending over the websocket",
                 program.display()
             );
+            warn_once("host::fallback", || {
+                format!(
+                    "{} --process-message failed ({why}); sending over the websocket instead",
+                    program.display()
+                )
+            });
             websocket(event).await
         }
     }
@@ -115,37 +120,6 @@ async fn run_bounded(mut cmd: tokio::process::Command, limit: Duration) -> Resul
     } else {
         Err(status.to_string())
     }
-}
-
-/// The executable of the process that started the plugin (normally OpenDeck).
-#[cfg(target_os = "linux")]
-fn parent_exe() -> Option<PathBuf> {
-    std::fs::read_link(format!("/proc/{}/exe", std::os::unix::process::parent_id())).ok()
-}
-
-/// macOS has no `/proc`; `proc_pidpath` gives the same answer.
-#[cfg(target_os = "macos")]
-fn parent_exe() -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    // SAFETY: `buf` is valid for `buf.len()` bytes, which is what we pass.
-    let len = unsafe {
-        libc::proc_pidpath(
-            std::os::unix::process::parent_id() as libc::c_int,
-            buf.as_mut_ptr().cast(),
-            buf.len() as u32,
-        )
-    };
-    if len <= 0 {
-        return None;
-    }
-    buf.truncate(len as usize);
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buf)))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn parent_exe() -> Option<PathBuf> {
-    None
 }
 
 /// OpenDeck starts the plugin, so its parent is normally the OpenDeck binary
@@ -193,12 +167,11 @@ pub async fn wait_until(
 /// For a host request whose effect never showed up although OpenDeck's state
 /// could be read - the one case that points at the sending route.
 pub fn warn_ignored_once() {
-    if !WARNED_IGNORED.swap(true, Ordering::SeqCst) {
-        log::warn!(
-            "OpenDeck ignored a brightness/profile request: check that `opendeck --process-message` \
-             works on this install (see README)"
-        );
-    }
+    warn_once("host::ignored", || {
+        "OpenDeck ignored a brightness/profile request: check that `opendeck --process-message` \
+         works on this install (see README)"
+            .to_string()
+    });
 }
 
 /// Logs `message` the first time `key` is seen in this run.
@@ -214,6 +187,7 @@ pub fn warn_once(key: &'static str, message: impl FnOnce() -> String) {
 pub mod fake {
     use super::*;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     type OnSend = Box<dyn Fn(&Value) + Send + Sync>;
 
@@ -277,6 +251,7 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn event_shapes_match_opendeck() {

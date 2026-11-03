@@ -5,7 +5,9 @@
 
 use crate::actions::Control;
 use crate::controller::Controller;
+use crate::render::dnd::{self, DndView};
 use crate::render::level::{self, LevelView};
+use crate::render::media::{self, NowPlayingView};
 use crate::render::profile::{self, ProfileView};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -17,6 +19,10 @@ use std::hash::{Hash, Hasher};
 pub trait Ui: Send + Sync {
     async fn show_level(&self, control: &Control, view: &LevelView);
     async fn show_profile(&self, control: &Control, view: &ProfileView);
+    /// A key only (the action has no dial layout).
+    async fn show_dnd(&self, control: &Control, view: &DndView);
+    /// A dial only (the action has no key tile).
+    async fn show_media(&self, control: &Control, view: &NowPlayingView);
     async fn alert(&self, id: &str);
     async fn send_to_pi(&self, id: &str, payload: Value);
     /// The instance (re)appeared or disappeared: its next frame must be sent
@@ -100,6 +106,16 @@ impl Ui for OpenDeckUi {
         self.show(control, frame).await;
     }
 
+    async fn show_dnd(&self, control: &Control, view: &DndView) {
+        self.show(control, Frame::Image(dnd::tile_image(view)))
+            .await;
+    }
+
+    async fn show_media(&self, control: &Control, view: &NowPlayingView) {
+        self.show(control, Frame::Feedback(media::strip_feedback(view)))
+            .await;
+    }
+
     async fn alert(&self, id: &str) {
         if let Some(instance) = openaction::get_instance(id.to_string()).await
             && let Err(e) = instance.show_alert().await
@@ -162,6 +178,15 @@ pub mod fake {
             self.push(format!(
                 "profile {} {} {}",
                 control.id, view.shown, view.hint
+            ));
+        }
+        async fn show_dnd(&self, control: &Control, view: &DndView) {
+            self.push(format!("dnd {} {} {}", control.id, view.state, view.hint));
+        }
+        async fn show_media(&self, control: &Control, view: &NowPlayingView) {
+            self.push(format!(
+                "media {} {} {} {}%",
+                control.id, view.title, view.artist, view.progress
             ));
         }
         async fn alert(&self, id: &str) {

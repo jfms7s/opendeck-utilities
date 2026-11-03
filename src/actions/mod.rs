@@ -5,11 +5,14 @@
 
 pub mod audio;
 pub mod brightness;
+pub mod dnd;
+pub mod media;
 pub mod profile;
 
 use crate::controller::Controller;
 use dashmap::DashMap;
 use openaction::Instance;
+use std::future::Future;
 
 /// What the action logic needs to know about an instance. Unlike
 /// `openaction::Instance`, tests can build one.
@@ -78,6 +81,19 @@ impl<S: Clone> Instances<S> {
     }
 }
 
+/// Renders every visible instance in turn: `render(control, settings)` for
+/// each entry of `instances.snapshot()`.
+pub async fn render_each<S, F, Fut>(instances: &Instances<S>, mut render: F)
+where
+    S: Clone,
+    F: FnMut(Control, S) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    for (control, settings) in instances.snapshot() {
+        render(control, settings).await;
+    }
+}
+
 /// A property inspector asks for its choices once it has registered, in
 /// case the push from `property_inspector_did_appear` arrived before it
 /// was listening.
@@ -113,6 +129,8 @@ mod tests {
         let mut registered = vec![
             <audio::AudioAction as Action>::UUID,
             <brightness::BrightnessAction as Action>::UUID,
+            <dnd::DndAction as Action>::UUID,
+            <media::MediaAction as Action>::UUID,
             <profile::ProfileAction as Action>::UUID,
         ];
         registered.sort();

@@ -1,7 +1,7 @@
 {
 	"Name": "Utilities",
 	"Author": "jfms7s",
-	"Version": "0.4.0",
+	"Version": "0.7.0",
 	"Category": "Utilities",
 	"Icon": "icons/icon",
 	"CategoryIcon": "icons/category",
@@ -32,6 +32,23 @@
 			"PropertyInspectorPath": "propertyInspector/brightness.html",
 			"States": [{ "Image": "icons/brightnessKey" }],
 			"Encoder": { "layout": "layouts/level.json" }
+		},
+		{
+			"UUID": "com.jfms7s.utilities.dnd",
+			"Name": "Do Not Disturb",
+			"Icon": "icons/dnd",
+			"Tooltip": "Silence desktop notifications, and see when they are silenced (Linux only)",
+			"Controllers": ["Keypad"],
+			"States": [{ "Image": "icons/dndKey" }]
+		},
+		{
+			"UUID": "com.jfms7s.utilities.media",
+			"Name": "Media",
+			"Icon": "icons/media",
+			"Tooltip": "Now playing on the touch strip: rotate to seek, press to play or pause, tap for the next track (Linux only)",
+			"Controllers": ["Encoder"],
+			"States": [{ "Image": "icons/media" }],
+			"Encoder": { "layout": "layouts/now-playing.json" }
 		},
 		{
 			"UUID": "com.jfms7s.utilities.profile",

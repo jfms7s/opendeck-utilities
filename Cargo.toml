@@ -1,6 +1,6 @@
 [package]
 name = "opendeck-utilities"
-version = "0.4.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.98.1" # the CI toolchain pin; Cargo refuses older compilers
 license = "MIT"
@@ -20,13 +20,25 @@ simplelog = "0.12"
 base64 = "0.22"
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# D-Bus (session bus) for the Do Not Disturb key; Linux only. The same
+# zbus line as opendeck-power-profile, which is being merged in.
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+futures-util = "0.3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # CoreAudio (HAL) bindings for the macOS audio backend; pure Rust.
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware"] }
+# Typed CFString ownership and reading for the HAL's device names and UIDs.
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFString"] }
 
 [dev-dependencies]
 tokio = { version = "1.48", features = ["test-util", "macros", "rt"] }
 tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The D-Bus tests serve a fake notification server on a private bus.
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
 
 [profile.release]
 lto = true

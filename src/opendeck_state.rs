@@ -2,6 +2,8 @@
 //! the profiles per device, and which one is active. Never written - these
 //! files belong to OpenDeck.
 
+use crate::changes;
+use crate::platform;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,12 +37,12 @@ const FALLBACK_POLL: Duration = Duration::from_secs(1);
 /// renamed in it, not in-place writes to the files inside, so on macOS the
 /// files the readers use are watched as well. inotify's directory watch
 /// already reports those writes.
-const WATCH_FILES: bool = cfg!(target_os = "macos");
+const WATCH_FILES: bool = platform::MACOS;
 /// OpenDeck's writes come as a few events; settle before re-reading.
 const SETTLE: Duration = Duration::from_millis(30);
 
 pub fn find_config_dir(home: &Path) -> Option<PathBuf> {
-    find_config_dir_in(home, candidates(cfg!(target_os = "macos")))
+    find_config_dir_in(home, candidates(platform::MACOS))
 }
 
 fn find_config_dir_in(home: &Path, candidates: &[&str]) -> Option<PathBuf> {
@@ -73,6 +75,10 @@ fn no_config_dir(macos: bool) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct OpenDeckState {
     dir: Option<PathBuf>,
+    /// Config files read so far (shared by clones), so tests can check how
+    /// often a render pass touches the disk.
+    #[cfg(test)]
+    reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl OpenDeckState {
@@ -81,12 +87,31 @@ impl OpenDeckState {
         if dir.is_none() {
             log::warn!("OpenDeck config directory not found; brightness/profile state unknown");
         }
-        Self { dir }
+        Self {
+            dir,
+            #[cfg(test)]
+            reads: Default::default(),
+        }
     }
 
     #[cfg(test)]
     pub fn at(dir: PathBuf) -> Self {
-        Self { dir: Some(dir) }
+        Self {
+            dir: Some(dir),
+            reads: Default::default(),
+        }
+    }
+
+    /// How many config files `brightness`/`active_profile` have read.
+    #[cfg(test)]
+    pub fn reads(&self) -> usize {
+        self.reads.load(Ordering::SeqCst)
+    }
+
+    fn read_config(&self, path: &Path) -> Option<Value> {
+        #[cfg(test)]
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        read_json(path)
     }
 
     /// Why the brightness can't be read, for a one-time log line.
@@ -96,7 +121,7 @@ impl OpenDeckState {
                 "can't read OpenDeck's brightness from {}",
                 dir.join("settings.json").display()
             ),
-            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
+            None => no_config_dir(platform::MACOS).to_string(),
         }
     }
 
@@ -109,12 +134,12 @@ impl OpenDeckState {
                     .join(format!("{device}.json"))
                     .display()
             ),
-            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
+            None => no_config_dir(platform::MACOS).to_string(),
         }
     }
 
     pub fn brightness(&self) -> Option<u8> {
-        let settings = read_json(&self.dir.as_ref()?.join("settings.json"))?;
+        let settings = self.read_config(&self.dir.as_ref()?.join("settings.json"))?;
         let value = settings.get("brightness")?.as_u64()?;
         u8::try_from(value.min(100)).ok()
     }
@@ -146,7 +171,7 @@ impl OpenDeckState {
             .join("profiles")
             .join(format!("{device}.json"));
         Some(
-            read_json(&path)?
+            self.read_config(&path)?
                 .get("selected_profile")?
                 .as_str()?
                 .to_string(),
@@ -229,7 +254,7 @@ pub fn spawn_watcher(state: OpenDeckState) -> watch::Receiver<u64> {
             let now = state.fingerprint();
             if now != last {
                 last = now;
-                tx.send_modify(|n| *n = n.wrapping_add(1));
+                changes::bump(&tx);
             }
         }
     });
@@ -675,7 +700,10 @@ mod tests {
         assert_eq!(s.brightness(), None);
         assert!(s.profiles("sd-2").is_empty());
         assert_eq!(s.active_profile("sd-2"), None);
-        let none = OpenDeckState { dir: None };
+        let none = OpenDeckState {
+            dir: None,
+            reads: Default::default(),
+        };
         assert_eq!(none.brightness(), None);
         assert!(none.fingerprint().is_empty());
     }
@@ -880,7 +908,10 @@ mod tests {
                 .contains(&tmp.path().join("settings.json").display().to_string())
         );
         assert!(s.profile_unreadable_reason("sd-1").ends_with("sd-1.json"));
-        let none = OpenDeckState { dir: None };
+        let none = OpenDeckState {
+            dir: None,
+            reads: Default::default(),
+        };
         assert!(none.brightness_unreadable_reason().contains("not found"));
     }
 

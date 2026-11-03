@@ -34,6 +34,90 @@
 		return Math.min(bound, cap ?? bound);
 	}
 
+	/**
+	 * What the page does with the plugin's `capabilities` block: the App
+	 * target option (kept so a saved App control still shows what it is,
+	 * disabled with the backend's reason when there's no per-app audio) and
+	 * the highest volume to offer below a setting's upper `bound`. A missing
+	 * block means everything is supported.
+	 */
+	function applyCapabilities(caps, bound) {
+		const perApp = caps?.perApp !== false;
+		const note = caps?.unsupportedNote;
+		return {
+			appOption: {
+				disabled: !perApp,
+				label: perApp || !note ? "Application" : `Application (${note})`,
+			},
+			volumeCap: caps?.volumeCap ?? null,
+			volumeLimit: volumeLimit(caps?.volumeCap, bound),
+		};
+	}
+
+	/**
+	 * The Device Brightness payload from the page's field `values` (strings
+	 * as typed): selects pass through, every number in `defaults.bounds` is
+	 * clamped (300 saves 100, an empty field saves the default, never 0).
+	 */
+	function brightnessPayload(values, defaults) {
+		const payload = { key_op: values.key_op, strip_tap: values.strip_tap };
+		for (const [id, bounds] of Object.entries(defaults.bounds)) {
+			payload[id] = clampInt(values[id], bounds, defaults.settings[id]);
+		}
+		return payload;
+	}
+
+	/**
+	 * The Audio page's numbers from its field `values` (strings as typed):
+	 * `step`, `max_volume` and each gesture slot's `volume` (in
+	 * `values.gesture_volumes`, by slot), clamped to `defaults.bounds` with
+	 * the volume bounds lowered to the backend's cap (`caps`, the plugin's
+	 * capabilities block; missing means no cap).
+	 */
+	function audioNumbers(values, defaults, caps) {
+		const bounds = (name) => {
+			const [min, max] = defaults.bounds[name];
+			return [min, applyCapabilities(caps, max).volumeLimit];
+		};
+		const gestureDefault = defaults.gestures.Keypad.press.volume;
+		return {
+			step: clampInt(values.step, defaults.bounds.step, defaults.settings.step),
+			max_volume: clampInt(values.max_volume, bounds("max_volume"), defaults.settings.max_volume),
+			gesture_volumes: Object.fromEntries(
+				Object.entries(values.gesture_volumes || {}).map(([slot, text]) => [
+					slot,
+					clampInt(text, bounds("gesture_volume"), gestureDefault),
+				]),
+			),
+		};
+	}
+
+	/**
+	 * What to store for one gesture slot after an edit elsewhere on the page.
+	 * A slot left at the controller's default (`fallback`, what the plugin
+	 * uses for an unset slot) stays unset, so a later change of default still
+	 * reaches it; `stored` is kept when it already says the same. Anything
+	 * else the user picked is stored as `collected`.
+	 */
+	function keepGesture(stored, collected, fallback) {
+		const same = (a, b) => !!a && !!b && a.op === b.op && a.volume === b.volume && a.device === b.device;
+		if (!same(collected, fallback)) return collected;
+		return same(stored, collected) ? stored : undefined;
+	}
+
+	/**
+	 * The brightness schedule to store from the page's two rows (`rows`:
+	 * `[{ time, value }]` as typed): a time is kept only as `HH:MM` (else
+	 * the slot is off, ""), a value is clamped to 0-100 and falls back to
+	 * the slot's `previous` value.
+	 */
+	function schedulePayload(rows, previous) {
+		return rows.map((row, i) => ({
+			time: /^([01]\d|2[0-3]):[0-5]\d$/.test(row.time || "") ? row.time : "",
+			value: clampInt(row.value, [0, 100], previous?.[i]?.value ?? 50),
+		}));
+	}
+
 	/** The JSON in `<script type="application/json" id="…">`. */
 	function readJson(id) {
 		return JSON.parse(document.getElementById(id).textContent);
@@ -43,7 +127,7 @@
 	 * Registers with the host. Handlers: `onOpen(payload)` once connected
 	 * (payload has `controller` and `settings`), `onSettings(settings)`,
 	 * `onMessage(payload)` for sendToPropertyInspector. Returns
-	 * `{ save(settings), requestChoices() }`.
+	 * `{ save(settings), requestChoices(), sendToPlugin(payload) }`.
 	 */
 	function connect({ onOpen, onSettings, onMessage }) {
 		let socket, uuid, action;
@@ -75,10 +159,22 @@
 			// Asked again once registered: the plugin's first push can arrive too early.
 			requestChoices: () =>
 				send({ event: "sendToPlugin", action, context: uuid, payload: { event: "requestChoices" } }),
+			sendToPlugin: (payload) => send({ event: "sendToPlugin", action, context: uuid, payload }),
 		};
 	}
 
-	const api = { mergeSubset, clampInt, volumeLimit, readJson, connect };
+	const api = {
+		mergeSubset,
+		clampInt,
+		volumeLimit,
+		applyCapabilities,
+		brightnessPayload,
+		audioNumbers,
+		keepGesture,
+		schedulePayload,
+		readJson,
+		connect,
+	};
 	if (typeof module === "object" && module.exports) {
 		module.exports = api;
 	} else {

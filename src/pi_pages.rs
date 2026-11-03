@@ -16,6 +16,7 @@ use std::ops::RangeInclusive;
 const AUDIO: &str = include_str!("../assets/propertyInspector/audio.html");
 const BRIGHTNESS: &str = include_str!("../assets/propertyInspector/brightness.html");
 const PROFILE: &str = include_str!("../assets/propertyInspector/profile.html");
+const PI_JS: &str = include_str!("../assets/propertyInspector/pi.js");
 
 /// The JSON inside `<script type="application/json" id="{id}">`.
 fn page_json(html: &str, id: &str) -> Value {
@@ -182,7 +183,26 @@ fn audio_page_reads_every_choice_the_plugin_sends() {
             "{key}"
         );
     }
+    // The capabilities block is read generically by `pi.js`.
+    for key in c["capabilities"].as_object().unwrap().keys() {
+        assert!(
+            PI_JS.contains(&format!("caps?.{key}")),
+            "capabilities.{key}"
+        );
+    }
     assert!(AUDIO.contains(r#""audioChoices""#));
+}
+
+/// The pages save through `pi.js`'s pure functions, which the node tests
+/// cover (tests/pi.test.mjs); inline clamping here would escape them.
+#[test]
+fn pages_build_their_payloads_with_the_tested_helpers() {
+    assert!(BRIGHTNESS.contains("PI.brightnessPayload("));
+    assert!(!BRIGHTNESS.contains("parseInt"));
+    for helper in ["PI.audioNumbers(", "PI.applyCapabilities("] {
+        assert!(AUDIO.contains(helper), "{helper}");
+    }
+    assert!(!AUDIO.contains("parseInt"));
 }
 
 #[test]
@@ -209,6 +229,23 @@ fn brightness_defaults_and_bounds_match_the_plugin() {
         &select_options(BRIGHTNESS, "strip_tap"),
         &[StripTap::TogglePresets, StripTap::HalfStep],
     );
+}
+
+/// The Brightness page shows the plugin-wide schedule the plugin sends and
+/// hands edits back in the shape `Schedule::from_value` reads.
+#[test]
+fn brightness_page_reads_and_sends_the_schedule() {
+    assert!(BRIGHTNESS.contains(r#""brightnessSchedule""#));
+    assert!(BRIGHTNESS.contains(r#"event: "setSchedule""#));
+    assert!(BRIGHTNESS.contains("PI.schedulePayload("));
+    let schedule = crate::schedule::Schedule::default().to_value();
+    for key in ["time", "value"] {
+        assert!(schedule[0].get(key).is_some(), "{key}");
+        assert!(
+            BRIGHTNESS.contains(&format!("?.{key}")) || BRIGHTNESS.contains(&format!(".{key} ")),
+            "{key}"
+        );
+    }
 }
 
 #[test]

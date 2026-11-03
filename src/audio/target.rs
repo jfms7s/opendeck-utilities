@@ -126,8 +126,8 @@ pub fn resolve(kind: TargetKind, name: &str, snap: &Snapshot) -> Resolved {
         },
         TargetKind::Output => by_name(DeviceKind::Output, name, snap, name),
         TargetKind::Input => by_name(DeviceKind::Input, name, snap, name),
-        TargetKind::App if snap.apps_unsupported => Resolved::Unavailable {
-            label: "not on macOS".to_string(),
+        TargetKind::App if !snap.caps.per_app => Resolved::Unavailable {
+            label: snap.caps.unsupported_label.to_string(),
         },
         TargetKind::App if name.is_empty() => Resolved::Unavailable {
             label: "pick an app".to_string(),
@@ -180,7 +180,7 @@ mod tests {
             resolve(TargetKind::App, "chrome", &snap),
             Resolved::App { .. }
         ));
-        snap.apps_unsupported = true;
+        snap.caps = crate::audio::coreaudio::hal::CAPABILITIES;
         assert_eq!(
             resolve(TargetKind::App, "chrome", &snap),
             Resolved::Unavailable {
