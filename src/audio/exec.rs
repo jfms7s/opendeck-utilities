@@ -341,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn the_platform_volume_cap_beats_max_volume() {
         let mut snap = fixture_snapshot();
-        snap.caps = crate::audio::hal::CAPABILITIES;
+        snap.caps = crate::audio::coreaudio::hal::CAPABILITIES;
         for d in &mut snap.sinks {
             d.volume = 95;
         }

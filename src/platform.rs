@@ -1,6 +1,6 @@
 //! Where platform differences live. Platform-specific helpers are here
-//! (backends sit in their own files: `audio/backend.rs` for `pactl`,
-//! `audio/coreaudio.rs` for CoreAudio); logic that must be tested for both
+//! (backends sit in their own folders: `audio/pactl/` for `pactl`,
+//! `audio/coreaudio/` for CoreAudio); logic that must be tested for both
 //! platforms takes the platform as a parameter (`MACOS`) instead of being
 //! compiled out, so Linux tests cover the macOS branch.
 
@@ -16,7 +16,7 @@ pub fn audio_backend() -> Arc<dyn AudioBackend> {
     #[cfg(target_os = "macos")]
     return Arc::new(crate::audio::coreaudio::CoreAudioBackend::default());
     #[cfg(not(target_os = "macos"))]
-    return Arc::new(crate::audio::backend::PactlBackend);
+    return Arc::new(crate::audio::pactl::PactlBackend);
 }
 
 /// The executable of the process that started the plugin (normally OpenDeck).

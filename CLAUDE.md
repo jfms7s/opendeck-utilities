@@ -20,15 +20,17 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
 
 ## Rules
 
-- `src/audio/backend.rs` is the only code that runs `pactl`. Every device name
+- `src/audio/pactl/` is the only code that runs `pactl`. Every device name
   goes through `is_safe_name`, and every `pactl` runs in the C locale
   (`pactl_command`). Long-lived children get `die_with_parent` (Linux-only:
   `PR_SET_PDEATHSIG`; a no-op elsewhere).
-- `src/audio/coreaudio.rs` (macOS only) is the only code that calls CoreAudio; pure
-  conversions live in `src/audio/hal.rs` so Linux tests cover them. macOS has no
+- `src/audio/coreaudio/backend.rs` (macOS only) is the only code that calls CoreAudio; pure
+  conversions live in `src/audio/coreaudio/hal.rs` so Linux tests cover them. macOS has no
   per-app audio (`Snapshot::caps`, `Capabilities::per_app`). Linux-only code is `cfg(target_os = "linux")`,
   macOS-only code `cfg(target_os = "macos")`; keep both targets clippy-clean.
-- Platform-specific helpers live in `src/platform.rs` (backends in their own files);
+- `src/audio/backend.rs` (the `AudioBackend` contract) and `src/audio/model.rs` (the
+  snapshot types) are backend-neutral: no backend's code goes there.
+- Platform-specific helpers live in `src/platform.rs` (backends in their own folders);
   logic that must be tested for both platforms takes the platform as a parameter
   (`platform::MACOS`).
 - OpenDeck's config files are read, never written (`src/opendeck_state.rs`).

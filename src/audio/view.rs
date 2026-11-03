@@ -334,7 +334,7 @@ mod tests {
     /// looks at inputs).
     #[test]
     fn an_output_shows_nothing_for_a_monitor_recorder() {
-        let snap = crate::audio::model::build_snapshot(
+        let snap = crate::audio::pactl::parse::build_snapshot(
             include_str!("fixtures/info.json"),
             include_str!("fixtures/sinks.json"),
             include_str!("fixtures/sources.json"),

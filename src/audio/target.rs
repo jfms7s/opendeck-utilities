@@ -180,7 +180,7 @@ mod tests {
             resolve(TargetKind::App, "chrome", &snap),
             Resolved::App { .. }
         ));
-        snap.caps = crate::audio::hal::CAPABILITIES;
+        snap.caps = crate::audio::coreaudio::hal::CAPABILITIES;
         assert_eq!(
             resolve(TargetKind::App, "chrome", &snap),
             Resolved::Unavailable {
