@@ -2,6 +2,7 @@
 //! the profiles per device, and which one is active. Never written - these
 //! files belong to OpenDeck.
 
+use crate::changes;
 use crate::platform;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -253,7 +254,7 @@ pub fn spawn_watcher(state: OpenDeckState) -> watch::Receiver<u64> {
             let now = state.fingerprint();
             if now != last {
                 last = now;
-                tx.send_modify(|n| *n = n.wrapping_add(1));
+                changes::bump(&tx);
             }
         }
     });

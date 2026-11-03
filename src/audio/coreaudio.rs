@@ -6,6 +6,7 @@
 use super::backend::{AudioBackend, BackendError, Mute, Node};
 use super::hal::{self, Controls, HalDevice};
 use super::model::{DeviceKind, Snapshot};
+use crate::changes::bump;
 use async_trait::async_trait;
 use hal::POLL;
 use objc2_core_audio::{
@@ -453,7 +454,7 @@ unsafe extern "C-unwind" fn on_change(
         )
     };
     listener.heard.fetch_add(1, Ordering::SeqCst);
-    listener.tx.send_modify(|n| *n = n.wrapping_add(1));
+    bump(&listener.tx);
     let wake = hal::route(id, changed.iter().map(|a| a.mSelector));
     if let Some(device) = wake.recheck
         && let Ok(mut queue) = listener.recheck.lock()
@@ -620,7 +621,7 @@ impl CoreAudioBackend {
                 l.writes.fetch_add(1, Ordering::SeqCst);
             }
             if let Some(tx) = self.tick.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                tx.send_modify(|n| *n = n.wrapping_add(1));
+                bump(tx);
             }
         }
         result
@@ -724,7 +725,7 @@ impl AudioBackend for CoreAudioBackend {
                     None => {}
                 }
                 if unread {
-                    tx.send_modify(|n| *n = n.wrapping_add(1));
+                    bump(&tx);
                 }
                 tokio::select! {
                     _ = tx.closed() => break,

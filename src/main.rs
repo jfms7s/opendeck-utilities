@@ -1,6 +1,7 @@
 mod actions;
 mod audio;
 mod brightness;
+mod changes;
 mod controller;
 mod cycle;
 mod dispatch;
