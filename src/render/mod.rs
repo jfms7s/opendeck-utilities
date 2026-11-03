@@ -3,6 +3,7 @@
 //! `ProfileView`), so dependencies always point feature -> render. Sending
 //! frames to the deck is `crate::ui`'s job.
 
+pub mod dnd;
 pub mod icons;
 pub mod level;
 pub mod profile;
