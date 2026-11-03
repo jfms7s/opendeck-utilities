@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::{Notify, OnceCell, watch};
+use tokio::sync::{Mutex, Notify, watch};
 use zbus::message::Type;
 use zbus::names::InterfaceName;
 use zbus::proxy::CacheProperties;
@@ -27,6 +27,9 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_secs(1);
 /// Re-read even without a signal.
 const SAFETY_POLL: Duration = Duration::from_secs(30);
+/// Signals that arrive within this of each other cause one re-read (a
+/// chatty player, or another process spamming PropertiesChanged).
+const COALESCE: Duration = Duration::from_millis(100);
 
 // Must match PATH and PLAYER_INTERFACE (the macro needs literals).
 #[proxy(
@@ -92,10 +95,28 @@ pub fn parse_player(bus: &str, props: &HashMap<String, OwnedVariant>) -> Player 
     }
 }
 
+/// Players as now listed on the bus: a player whose read failed (busy,
+/// timed out) keeps its last known state rather than vanishing, so the
+/// dial doesn't jump to another player; one never read is left out.
+/// Sorted by bus name.
+pub fn merge_reads(previous: &[Player], reads: Vec<(String, Option<Player>)>) -> Vec<Player> {
+    let mut players: Vec<Player> = reads
+        .into_iter()
+        .filter_map(|(name, read)| {
+            read.or_else(|| previous.iter().find(|p| p.bus == name).cloned())
+        })
+        .collect();
+    players.sort_by(|a, b| a.bus.cmp(&b.bus));
+    players
+}
+
 pub struct MprisMedia {
     /// `None`: the session bus.
     address: Option<String>,
-    connection: OnceCell<Connection>,
+    /// Rebuilt when the change stream ends (the bus connection died).
+    connection: Mutex<Option<Connection>>,
+    /// One re-read at a time, so an older read can't overwrite a newer one.
+    refreshing: Mutex<()>,
     state: watch::Sender<Players>,
     watching: AtomicBool,
     wake: Notify,
@@ -106,7 +127,8 @@ impl MprisMedia {
     pub fn start(address: Option<String>) -> Arc<Self> {
         let me = Arc::new(Self {
             address,
-            connection: OnceCell::new(),
+            connection: Mutex::new(None),
+            refreshing: Mutex::new(()),
             state: watch::Sender::new(Players::Unknown),
             watching: AtomicBool::new(false),
             wake: Notify::new(),
@@ -116,16 +138,25 @@ impl MprisMedia {
         me
     }
 
-    async fn connection(&self) -> zbus::Result<&Connection> {
-        self.connection
-            .get_or_try_init(|| async {
-                let builder = match &self.address {
-                    Some(address) => zbus::connection::Builder::address(address.as_str()),
-                    None => zbus::connection::Builder::session(),
-                };
-                builder.method_timeout(CALL_TIMEOUT).build().await
-            })
+    async fn connection(&self) -> zbus::Result<Connection> {
+        let mut slot = self.connection.lock().await;
+        if let Some(conn) = slot.as_ref() {
+            return Ok(conn.clone());
+        }
+        let builder = match &self.address {
+            Some(address) => zbus::connection::Builder::address(address.as_str()),
+            None => zbus::connection::Builder::session(),
+        };
+        let conn = tokio::time::timeout(CALL_TIMEOUT, builder.method_timeout(CALL_TIMEOUT).build())
             .await
+            .map_err(|_| zbus::Error::Failure("session bus connection timed out".into()))??;
+        *slot = Some(conn.clone());
+        Ok(conn)
+    }
+
+    /// The bus went away: connect afresh next time.
+    async fn forget_connection(&self) {
+        *self.connection.lock().await = None;
     }
 
     fn warn_once(&self, what: &str, e: &zbus::Error) {
@@ -149,23 +180,42 @@ impl MprisMedia {
         Ok(parse_player(bus, &all))
     }
 
-    async fn read(&self) -> zbus::Result<Vec<Player>> {
+    /// Reads every player at once (each bounded by the call timeout), so a
+    /// hung player costs one timeout, not one per player.
+    async fn read(&self, previous: &[Player]) -> zbus::Result<Vec<Player>> {
         let conn = self.connection().await?;
-        let names = zbus::fdo::DBusProxy::new(conn).await?.list_names().await?;
-        let mut players = Vec::new();
-        for name in names.iter().filter(|n| n.as_str().starts_with(PREFIX)) {
-            match Self::read_player(conn, name.as_str()).await {
-                Ok(p) => players.push(p),
-                // A player that just quit, or doesn't implement Player.
-                Err(e) => log::debug!("Media: can't read {name}: {e}"),
+        let names = zbus::fdo::DBusProxy::new(&conn).await?.list_names().await?;
+        let names: Vec<String> = names
+            .iter()
+            .map(|n| n.as_str().to_string())
+            .filter(|n| n.starts_with(PREFIX))
+            .collect();
+        let reads = futures_util::future::join_all(names.iter().map(|name| {
+            let conn = &conn;
+            async move {
+                match Self::read_player(conn, name).await {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        log::debug!("Media: can't read {name}: {e}");
+                        None
+                    }
+                }
             }
-        }
-        players.sort_by(|a, b| a.bus.cmp(&b.bus));
-        Ok(players)
+        }))
+        .await;
+        Ok(merge_reads(
+            previous,
+            names.into_iter().zip(reads).collect(),
+        ))
     }
 
     async fn refresh(&self) {
-        let now = match self.read().await {
+        let _one = self.refreshing.lock().await;
+        let previous = match &*self.state.borrow() {
+            Players::Listed(ps) => ps.clone(),
+            _ => Vec::new(),
+        };
+        let now = match self.read(&previous).await {
             Ok(players) => {
                 self.warned.store(false, Ordering::SeqCst);
                 Players::Listed(players)
@@ -190,6 +240,7 @@ impl MprisMedia {
     /// coming or going.
     async fn changes(&self) -> zbus::Result<impl futures_util::Stream<Item = ()> + 'static> {
         let conn = self.connection().await?;
+        let conn = &conn;
         let rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .interface("org.freedesktop.DBus.Properties")
@@ -225,7 +276,18 @@ impl MprisMedia {
                             };
                         tokio::select! {
                             next = changes.next() => match next {
-                                Some(()) => self.refresh().await,
+                                Some(()) => {
+                                    // Coalesce a burst into one re-read.
+                                    let quiet = tokio::time::sleep(COALESCE);
+                                    tokio::pin!(quiet);
+                                    loop {
+                                        tokio::select! {
+                                            () = &mut quiet => break,
+                                            more = changes.next() => if more.is_none() { break },
+                                        }
+                                    }
+                                    self.refresh().await;
+                                }
                                 None => break,
                             },
                             () = self.wake.notified() => self.refresh().await,
@@ -238,13 +300,16 @@ impl MprisMedia {
                     self.refresh().await;
                 }
             }
+            // The stream ended or couldn't start: the connection is likely
+            // gone, so reconnect on the next try.
+            self.forget_connection().await;
             tokio::time::sleep(SAFETY_POLL).await;
         }
     }
 
     async fn player(&self, bus: &str) -> Result<MprisPlayerProxy<'static>, String> {
         let conn = self.connection().await.map_err(|e| e.to_string())?;
-        MprisPlayerProxy::builder(conn)
+        MprisPlayerProxy::builder(&conn)
             .destination(bus.to_string())
             .cache_properties(CacheProperties::No)
             .build()
@@ -328,6 +393,27 @@ mod tests {
         assert_eq!(p.position, Duration::from_secs(50));
         assert_eq!(p.status, Status::Playing);
         assert!(p.can_seek);
+    }
+
+    #[test]
+    fn a_failed_read_keeps_the_last_known_state() {
+        let known = |bus: &str, title: &str| Player {
+            bus: bus.into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let previous = [known("a", "old a"), known("b", "old b")];
+        let merged = merge_reads(
+            &previous,
+            vec![
+                ("b".into(), None),
+                ("a".into(), Some(known("a", "new a"))),
+                ("c".into(), None),
+            ],
+        );
+        assert_eq!(merged, vec![known("a", "new a"), known("b", "old b")]);
+        // A player gone from the bus is gone, whatever was known about it.
+        assert_eq!(merge_reads(&previous, vec![]), vec![]);
     }
 
     #[test]

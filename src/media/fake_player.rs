@@ -3,6 +3,7 @@
 use crate::test_bus::PrivateBus;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use zbus::names::InterfaceName;
 use zbus::object_server::SignalEmitter;
@@ -19,6 +20,8 @@ pub struct PlayerState {
     pub position: Mutex<i64>,
     pub length: i64,
     pub calls: Mutex<Vec<String>>,
+    /// Reads of `Position` (so `GetAll`) never answer: a hung player.
+    pub hang: AtomicBool,
     conn: OnceLock<Connection>,
 }
 
@@ -114,7 +117,10 @@ impl FakePlayer {
     }
 
     #[zbus(property(emits_changed_signal = "false"))]
-    fn position(&self) -> i64 {
+    async fn position(&self) -> i64 {
+        if self.0.hang.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
         *self.0.position.lock().unwrap()
     }
 
@@ -134,6 +140,7 @@ pub async fn serve_player(bus: &PrivateBus, name: &str) -> Arc<PlayerState> {
         position: Mutex::new(50_000_000),
         length: 200_000_000,
         calls: Mutex::default(),
+        hang: AtomicBool::new(false),
         conn: OnceLock::new(),
     });
     let conn = zbus::connection::Builder::address(bus.address.as_str())

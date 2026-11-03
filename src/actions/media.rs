@@ -278,6 +278,19 @@ mod tests {
         assert!(port.calls().is_empty());
     }
 
+    /// Position polling stops only when the last dial goes.
+    #[tokio::test]
+    async fn watching_lasts_while_any_dial_is_visible() {
+        let (action, port, _ui) = rig(Players::Listed(vec![]));
+        let (a, b) = (Control::dial("a"), Control::dial("b"));
+        action.appear(&a).await;
+        action.appear(&b).await;
+        action.disappear(&a);
+        assert!(port.watching.load(Ordering::SeqCst));
+        action.disappear(&b);
+        assert!(!port.watching.load(Ordering::SeqCst));
+    }
+
     #[tokio::test]
     async fn a_change_on_the_bus_re_renders() {
         let port = Arc::new(FakeMedia::new(Players::Listed(vec![])));

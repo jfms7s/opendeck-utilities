@@ -99,3 +99,33 @@ async fn commands_only_go_to_mpris_names() {
     let port = MprisMedia::start(Some(bus.address.clone()));
     assert!(port.play_pause("org.freedesktop.DBus").await.is_err());
 }
+
+/// A hung player costs one call timeout and keeps its last known state;
+/// another player's change still gets through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hung_player_neither_vanishes_nor_stalls_the_others() {
+    let bus = PrivateBus::start();
+    let stuck = serve_player(&bus, "a").await;
+    let fine = serve_player(&bus, "b").await;
+    let port = MprisMedia::start(Some(bus.address.clone()));
+    let mut rx = port.players();
+    until(
+        &mut rx,
+        "listed both",
+        |p| matches!(p, Players::Listed(ps) if ps.len() == 2),
+    )
+    .await;
+    stuck.hang.store(true, std::sync::atomic::Ordering::SeqCst);
+    *fine.title.lock().unwrap() = "Retitled".into();
+    fine.announce().await;
+    let started = std::time::Instant::now();
+    until(&mut rx, "saw b's change", |p| {
+        matches!(p, Players::Listed(ps) if ps.len() == 2 && ps[1].title == "Retitled" && ps[0].title == "Song")
+    })
+    .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "took {:?}",
+        started.elapsed()
+    );
+}
