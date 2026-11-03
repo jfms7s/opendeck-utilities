@@ -8,6 +8,7 @@ mod host;
 mod lenient;
 mod opendeck_state;
 mod pending;
+mod platform;
 mod profile;
 mod render;
 mod schedule;
@@ -21,7 +22,6 @@ use actions::brightness::BrightnessAction;
 use actions::brightness::GlobalSettingsStore;
 use actions::profile::ProfileAction;
 use async_trait::async_trait;
-use audio::backend::AudioBackend;
 use host::{Host, OpenDeckHost};
 use openaction::global_events::{
     DidReceiveGlobalSettingsEvent, GlobalEventHandler, set_global_event_handler,
@@ -32,14 +32,6 @@ use schedule::{Schedule, SystemClock};
 use std::sync::Arc;
 use std::time::Duration;
 use ui::{OpenDeckUi, Ui};
-
-/// CoreAudio on macOS, `pactl` (PipeWire/PulseAudio) elsewhere.
-fn audio_backend() -> Arc<dyn AudioBackend> {
-    #[cfg(target_os = "macos")]
-    return Arc::new(audio::coreaudio::CoreAudioBackend::default());
-    #[cfg(not(target_os = "macos"))]
-    return Arc::new(audio::backend::PactlBackend);
-}
 
 // Two workers are plenty for a handful of controls (performance review);
 // nothing here blocks a worker for long.
@@ -55,7 +47,7 @@ async fn main() -> OpenActionResult<()> {
     let deck_state = OpenDeckState::discover();
     let deck_changes = opendeck_state::spawn_watcher(deck_state.clone());
 
-    let audio = AudioAction::start(audio_backend(), ui.clone());
+    let audio = AudioAction::start(platform::audio_backend(), ui.clone());
     register_action(audio.clone()).await;
     let brightness = BrightnessAction::start(
         deck_state.clone(),

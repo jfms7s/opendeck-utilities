@@ -2,6 +2,7 @@
 //! the profiles per device, and which one is active. Never written - these
 //! files belong to OpenDeck.
 
+use crate::platform;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,12 +36,12 @@ const FALLBACK_POLL: Duration = Duration::from_secs(1);
 /// renamed in it, not in-place writes to the files inside, so on macOS the
 /// files the readers use are watched as well. inotify's directory watch
 /// already reports those writes.
-const WATCH_FILES: bool = cfg!(target_os = "macos");
+const WATCH_FILES: bool = platform::MACOS;
 /// OpenDeck's writes come as a few events; settle before re-reading.
 const SETTLE: Duration = Duration::from_millis(30);
 
 pub fn find_config_dir(home: &Path) -> Option<PathBuf> {
-    find_config_dir_in(home, candidates(cfg!(target_os = "macos")))
+    find_config_dir_in(home, candidates(platform::MACOS))
 }
 
 fn find_config_dir_in(home: &Path, candidates: &[&str]) -> Option<PathBuf> {
@@ -119,7 +120,7 @@ impl OpenDeckState {
                 "can't read OpenDeck's brightness from {}",
                 dir.join("settings.json").display()
             ),
-            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
+            None => no_config_dir(platform::MACOS).to_string(),
         }
     }
 
@@ -132,7 +133,7 @@ impl OpenDeckState {
                     .join(format!("{device}.json"))
                     .display()
             ),
-            None => no_config_dir(cfg!(target_os = "macos")).to_string(),
+            None => no_config_dir(platform::MACOS).to_string(),
         }
     }
 
