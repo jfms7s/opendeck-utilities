@@ -1,4 +1,4 @@
-use super::{Control, Instances, is_choices_request};
+use super::{Control, Instances, is_choices_request, render_each};
 use crate::brightness::{
     BrightnessSettings, Request, apply, brightness_view, key_request, rotate_request, tap_request,
     toggle_request,
@@ -201,9 +201,10 @@ impl BrightnessAction {
     /// once per pass, however many controls are visible.
     async fn render_all(&self) {
         let current = self.current();
-        for (control, ()) in self.shared.instances.snapshot() {
+        render_each(&self.shared.instances, |control, ()| async move {
             self.render(&control, current).await;
-        }
+        })
+        .await;
     }
 
     async fn run_watcher(self, mut changes: watch::Receiver<u64>) {

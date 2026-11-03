@@ -1,4 +1,4 @@
-use super::{Control, Instances, is_choices_request};
+use super::{Control, Instances, is_choices_request, render_each};
 use crate::audio::backend::AudioBackend;
 use crate::audio::exec::{apply_locally, execute};
 use crate::audio::gesture::{self, Operation};
@@ -179,9 +179,10 @@ impl AudioAction {
     }
 
     async fn render_all(&self) {
-        for (control, settings) in self.shared.instances.snapshot() {
+        render_each(&self.shared.instances, |control, settings| async move {
             self.render(&control, &settings).await;
-        }
+        })
+        .await;
     }
 
     /// Runs forever: refresh + re-render on every (debounced) change tick.

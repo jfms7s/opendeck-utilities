@@ -7,6 +7,7 @@
 #![cfg_attr(target_os = "macos", allow(dead_code))]
 
 use super::model::{self, DeviceKind, ParseError, Snapshot};
+use crate::changes::bump;
 use async_trait::async_trait;
 use std::process::Stdio;
 use std::time::Duration;
@@ -361,10 +362,6 @@ pub fn should_retry(e: &BackendError) -> bool {
 
 pub fn next_backoff(current: Duration) -> Duration {
     (current * 2).min(MAX_BACKOFF)
-}
-
-fn bump(tx: &watch::Sender<u64>) {
-    tx.send_modify(|n| *n = n.wrapping_add(1));
 }
 
 /// Runs one `pactl subscribe` until it exits. Returns whether it printed

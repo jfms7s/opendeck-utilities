@@ -10,6 +10,7 @@ pub mod profile;
 use crate::controller::Controller;
 use dashmap::DashMap;
 use openaction::Instance;
+use std::future::Future;
 
 /// What the action logic needs to know about an instance. Unlike
 /// `openaction::Instance`, tests can build one.
@@ -75,6 +76,19 @@ impl<S: Clone> Instances<S> {
     /// A copy, so no `DashMap` shard lock is held across an `await`.
     pub fn snapshot(&self) -> Vec<(Control, S)> {
         self.map.iter().map(|e| e.value().clone()).collect()
+    }
+}
+
+/// Renders every visible instance in turn: `render(control, settings)` for
+/// each entry of `instances.snapshot()`.
+pub async fn render_each<S, F, Fut>(instances: &Instances<S>, mut render: F)
+where
+    S: Clone,
+    F: FnMut(Control, S) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    for (control, settings) in instances.snapshot() {
+        render(control, settings).await;
     }
 }
 

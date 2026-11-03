@@ -28,6 +28,9 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
   conversions live in `src/audio/hal.rs` so Linux tests cover them. macOS has no
   per-app audio (`Snapshot::caps`, `Capabilities::per_app`). Linux-only code is `cfg(target_os = "linux")`,
   macOS-only code `cfg(target_os = "macos")`; keep both targets clippy-clean.
+- Platform-specific helpers live in `src/platform.rs` (backends in their own files);
+  logic that must be tested for both platforms takes the platform as a parameter
+  (`platform::MACOS`).
 - OpenDeck's config files are read, never written (`src/opendeck_state.rs`).
   Device ids are path components: check `is_safe_device_id` before joining.
 - Anything handed to another program is validated first: audio targets must exist
