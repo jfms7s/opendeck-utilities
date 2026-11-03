@@ -189,16 +189,20 @@ impl BrightnessAction {
         self.shared.pending.resolve(self.shared.state.brightness())
     }
 
-    async fn render(&self, control: &Control) {
+    /// Shows `current` (from [`Self::current`]) on one control.
+    async fn render(&self, control: &Control, current: Option<u8>) {
         self.shared
             .ui
-            .show_level(control, &brightness_view(self.current()))
+            .show_level(control, &brightness_view(current))
             .await;
     }
 
+    /// Every control shows the same value: OpenDeck's settings are read
+    /// once per pass, however many controls are visible.
     async fn render_all(&self) {
+        let current = self.current();
         for (control, ()) in self.shared.instances.snapshot() {
-            self.render(&control).await;
+            self.render(&control, current).await;
         }
     }
 
@@ -323,7 +327,7 @@ impl BrightnessAction {
     async fn appear(&self, control: &Control) {
         self.shared.ui.forget(&control.id);
         self.shared.instances.insert(control, &());
-        self.render(control).await;
+        self.render(control, self.current()).await;
     }
 
     fn disappear(&self, control: &Control) {
@@ -658,6 +662,22 @@ mod tests {
             vec![json!({"event": "deviceBrightness", "action": "set", "value": 65})]
         );
         assert_eq!(r.ui.alerts(), 0);
+    }
+
+    /// Performance review finding 6: one OpenDeck change re-renders every
+    /// control from a single read of settings.json.
+    #[tokio::test(start_paused = true)]
+    async fn a_render_pass_reads_settings_once_for_every_control() {
+        let r = rig(Some(50), true);
+        for c in [Control::key("a"), Control::dial("b"), Control::dial("c")] {
+            r.action.appear(&c).await;
+        }
+        let before = r.action.shared.state.reads();
+        r.action.render_all().await;
+        assert_eq!(r.action.shared.state.reads() - before, 1);
+        let mut shown = r.ui.events().split_off(r.ui.events().len() - 3);
+        shown.sort();
+        assert_eq!(shown, ["level a 50%", "level b 50%", "level c 50%"]);
     }
 
     /// QA mutation 2: a request OpenDeck ignores must alert.

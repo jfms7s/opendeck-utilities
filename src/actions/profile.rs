@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use openaction::{Action, Instance, OpenActionResult};
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -123,6 +124,12 @@ impl ProfileAction {
     async fn render(&self, control: &Control, settings: &ProfileSettings) {
         let device = target_device(settings, &control.device);
         let active = self.active_profile(&device);
+        self.show(control, settings, active).await;
+    }
+
+    /// Shows `active` (the target device's profile, from
+    /// [`Self::active_profile`]) on one control.
+    async fn show(&self, control: &Control, settings: &ProfileSettings, active: Option<String>) {
         let view = match control.controller {
             Controller::Keypad => key_view(active.as_deref(), &settings.profile),
             Controller::Encoder => {
@@ -133,9 +140,17 @@ impl ProfileAction {
         self.shared.ui.show_profile(control, &view).await;
     }
 
+    /// Reads each target device's active profile once per pass, however
+    /// many controls show it.
     async fn render_all(&self) {
+        let mut active: HashMap<String, Option<String>> = HashMap::new();
         for (control, settings) in self.shared.instances.snapshot() {
-            self.render(&control, &settings).await;
+            let device = target_device(&settings, &control.device);
+            let profile = active
+                .entry(device)
+                .or_insert_with_key(|device| self.active_profile(device))
+                .clone();
+            self.show(&control, &settings, profile).await;
         }
     }
 
@@ -431,6 +446,41 @@ mod tests {
     }
 
     /// QA mutation 3: the pending profile shows before the send finishes.
+    /// Performance review finding 6: one read of each target device's
+    /// profile file per render pass, however many controls show it.
+    #[tokio::test(start_paused = true)]
+    async fn a_render_pass_reads_each_device_once() {
+        let r = rig(false);
+        fs::create_dir_all(r.tmp.path().join("profiles/sd-2")).unwrap();
+        select(r.tmp.path(), "sd-2", "Other");
+        let other = ProfileSettings {
+            device: "sd-2".into(),
+            ..key_settings("Other")
+        };
+        r.action
+            .appear(&Control::key("a"), &key_settings("claude"))
+            .await;
+        r.action
+            .appear(&Control::key("b"), &key_settings("gaming"))
+            .await;
+        r.action
+            .appear(&Control::dial("c"), &ProfileSettings::default())
+            .await;
+        r.action.appear(&Control::key("d"), &other).await;
+        let before = r.action.shared.state.reads();
+        let shown = r.ui.events().len();
+        r.action.render_all().await;
+        assert_eq!(r.action.shared.state.reads() - before, 2, "sd-1 and sd-2");
+        let after: Vec<String> = r.ui.events()[shown..].to_vec();
+        let mut again: Vec<String> = Vec::new();
+        for (c, settings) in r.action.shared.instances.snapshot() {
+            let at = r.ui.events().len();
+            r.action.render(&c, &settings).await;
+            again.extend(r.ui.events()[at..].iter().cloned());
+        }
+        assert_eq!(after, again, "same views as rendering one at a time");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_switch_shows_the_new_profile_at_once_and_is_confirmed() {
         let r = rig(true);
