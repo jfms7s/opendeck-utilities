@@ -2,7 +2,7 @@ name: CI
 # Replaces the in-repo jobs test, macos, bundle, audit, quality. Scheduled runs only run `audit`.
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
   schedule:
     - cron: "17 6 * * 1"
