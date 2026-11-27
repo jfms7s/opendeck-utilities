@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<link rel="stylesheet" href="pi.css" />
+</head>
+<body>
+	<main class="pi">
+		<section class="card">
+			<h2>Action</h2>
+			<div class="field">
+				<label for="mode">On press</label>
+				<select id="mode">
+					<option value="cycle">Cycle through the layouts</option>
+					<option value="set">Set one layout</option>
+				</select>
+				<p class="hint" id="cycle_hint">1/2 → 1/3 → 25·50·25, then back to 1/2. Columns that were dragged a little off a layout are put back first.</p>
+			</div>
+			<div class="field" id="layout_field">
+				<label for="layout">Layout</label>
+				<select id="layout">
+					<option value="halves">1/2 (two halves)</option>
+					<option value="thirds">1/3 (three thirds)</option>
+					<option value="wide">25·50·25 (wide centre)</option>
+				</select>
+			</div>
+			<div class="status">Needs KDE Plasma 6 on Linux. A press sets the tile columns of the screen and virtual desktop in use; if KWin can't be reached the key flashes an alert and the plugin log says why.</div>
+		</section>
+	</main>
+	<!-- Defaults; src/pi_pages.rs checks they match the plugin. -->
+	<script type="application/json" id="defaults">
+	{
+		"settings": { "mode": "cycle", "layout": "wide" }
+	}
+	</script>
+	<script src="pi.js"></script>
+	<script>
+		const DEFAULTS = PI.readJson("defaults");
+		const byId = (id) => document.getElementById(id);
+
+		const pi = PI.connect({
+			onOpen(payload) {
+				apply(payload.settings || {});
+			},
+			onSettings: apply,
+		});
+
+		function showFields() {
+			const set = byId("mode").value === "set";
+			byId("layout_field").classList.toggle("hidden", !set);
+			byId("cycle_hint").classList.toggle("hidden", set);
+		}
+
+		function apply(settings) {
+			for (const [id, fallback] of Object.entries(DEFAULTS.settings)) byId(id).value = settings[id] ?? fallback;
+			showFields();
+		}
+
+		function send() {
+			showFields();
+			pi.save({ mode: byId("mode").value, layout: byId("layout").value });
+		}
+
+		for (const id of Object.keys(DEFAULTS.settings)) byId(id).addEventListener("change", send);
+		apply({});
+	</script>
+</body>
+</html>

@@ -1,9 +1,11 @@
 # CLAUDE.md
 
 OpenDeck plugin (`com.jfms7s.utilities`, Rust on the `openaction` crate; Linux
-x86_64 and Apple Silicon macOS) with five actions: Audio (`pactl` on Linux,
+x86_64 and Apple Silicon macOS) with six actions: Audio (`pactl` on Linux,
 CoreAudio on macOS), Device Brightness and Switch Profile (`opendeck
---process-message`), Do Not Disturb and Media (session D-Bus, Linux only).
+--process-message`), Do Not Disturb and Media (session D-Bus, Linux only), and
+Window Layout (sets KWin's tile columns by running a KWin script over the session
+D-Bus; Linux with KDE Plasma 6 only).
 Design docs, plans, reviews and issue write-ups live in the Obsidian vault at
 `~/git/obsidian-vault/personal/projects/opendeck-utilities/`, not in this repo.
 
@@ -13,7 +15,7 @@ Design docs, plans, reviews and issue write-ups live in the Obsidian vault at
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
-node --test tests/*.test.mjs       # property-inspector helpers
+node --test tests/*.test.mjs       # property-inspector helpers and the KWin layout script
 cargo clippy --target aarch64-apple-darwin --all-targets --locked -- -D warnings  # macOS code, type-checked from Linux
 cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.mjs
 ```
@@ -30,11 +32,18 @@ cargo build --release --locked --target x86_64-unknown-linux-gnu && node build.m
   macOS-only code `cfg(target_os = "macos")`; keep both targets clippy-clean.
 - `src/audio/backend.rs` (the `AudioBackend` contract) and `src/audio/model.rs` (the
   snapshot types) are backend-neutral: no backend's code goes there.
-- `src/notifications/dbus.rs` (Do Not Disturb) and `src/media/mpris.rs` (MPRIS
-  players) are the only code that talks to the session bus; every call has a
-  timeout and none is awaited on the event loop. All D-Bus code and `zbus` are
-  `cfg(target_os = "linux")`. Their tests run a private `dbus-daemon`
-  (`src/test_bus.rs`, fakes next to each adapter), never the real bus.
+- `src/notifications/dbus.rs` (Do Not Disturb), `src/media/mpris.rs` (MPRIS
+  players) and `src/kwin/scripting.rs` (KWin) are the only code that talks to the
+  session bus; every call has a timeout and none is awaited on the event loop.
+  All D-Bus code and `zbus` are `cfg(target_os = "linux")`. Their tests run a
+  private `dbus-daemon` (`src/test_bus.rs`, fakes next to each adapter), never
+  the real bus.
+- `src/kwin/scripting.rs` (Window Layout) is the only code that talks to
+  `org.kde.KWin`. The script it runs is only `src/kwin/layout.js` plus a `CONFIG`
+  line serialised from the `Layout`/`Mode` tables in `src/layout.rs`
+  (`layout::script`), never raw settings text. Its tests use the fake KWin on the
+  private bus (`src/kwin/fake_kwin.rs`), never the real compositor; the script's
+  own logic is tested by `tests/layout-script.test.mjs`.
 - Platform-specific helpers live in `src/platform.rs` (backends in their own folders);
   logic that must be tested for both platforms takes the platform as a parameter
   (`platform::MACOS`).

@@ -1,7 +1,8 @@
-//! The three `openaction` actions. Each `Action` impl is a thin adapter: it
-//! turns the `Instance` into a `Control` and calls the action's own methods,
-//! which reach the deck only through `crate::ui::Ui` and OpenDeck only
-//! through `crate::host::Host` - so the gesture handling runs under test.
+//! The plugin's `openaction` actions, one module each. Each `Action` impl
+//! is a thin adapter: it turns the `Instance` into a `Control` and calls the
+//! action's own methods, which reach the deck only through `crate::ui::Ui`
+//! and OpenDeck only through `crate::host::Host` - so the gesture handling
+//! runs under test.
 
 pub mod audio;
 pub mod brightness;
@@ -135,6 +136,7 @@ mod tests {
             <audio::AudioAction as Action>::UUID,
             <brightness::BrightnessAction as Action>::UUID,
             <dnd::DndAction as Action>::UUID,
+            <layout::LayoutAction as Action>::UUID,
             <media::MediaAction as Action>::UUID,
             <profile::ProfileAction as Action>::UUID,
         ];
