@@ -118,6 +118,15 @@
 		}));
 	}
 
+	/**
+	 * The value a select shows for a stored setting: `stored` if it is one of
+	 * the select's option `values`, else `fallback` (the setting's default, as
+	 * the plugin reads an unknown value), never a blank select.
+	 */
+	function optionOr(stored, values, fallback) {
+		return values.includes(stored) ? stored : fallback;
+	}
+
 	/** The JSON in `<script type="application/json" id="…">`. */
 	function readJson(id) {
 		return JSON.parse(document.getElementById(id).textContent);
@@ -172,6 +181,7 @@
 		audioNumbers,
 		keepGesture,
 		schedulePayload,
+		optionOr,
 		readJson,
 		connect,
 	};

@@ -26,6 +26,13 @@ function config(mode = "cycle", target = "wide") {
  * a sibling after it and halves it; `split` on a leaf root makes two children;
  * `remove()` gives the space and the windows to the left neighbour (or the right
  * one for the first column); `relativeGeometry` reads are live.
+ *
+ * Writing `relativeGeometry` on a column moves the edges it shares with its
+ * neighbours (the outer edges of the row stay put), and silently does nothing
+ * when the column or a neighbour would end up at or below its `minWidth`.
+ * `manage(window)` returns false for a window named in the tile's `refuses`
+ * and throws for a window with `manageThrows`. A tile with `strands` set
+ * untiles its windows when removed, the worst KWin could do.
  */
 class FakeTile {
 	constructor(parent, geom) {
@@ -34,6 +41,10 @@ class FakeTile {
 		this.windows = [];
 		this.layoutDirection = HORIZONTAL;
 		this.geom = { ...geom };
+		this.minWidth = 0;
+		this.refuses = [];
+		this.strands = false;
+		this.writes = 0;
 	}
 
 	get relativeGeometry() {
@@ -55,7 +66,25 @@ class FakeTile {
 	}
 
 	set relativeGeometry(r) {
-		this.geom = { x: r.x, y: r.y, width: r.width, height: r.height };
+		this.writes++;
+		const parent = this.parent;
+		if (!parent || parent.layoutDirection !== HORIZONTAL) {
+			this.geom = { x: r.x, y: r.y, width: r.width, height: r.height };
+			return;
+		}
+		const i = parent.tiles.indexOf(this);
+		const before = parent.tiles[i - 1];
+		const after = parent.tiles[i + 1];
+		const g = this.geom;
+		const left = before ? r.x : g.x;
+		const right = after ? r.x + r.width : g.x + g.width;
+		const tooNarrow = (tile, width) => width <= tile.minWidth;
+		if (tooNarrow(this, right - left)) return;
+		if (before && tooNarrow(before, left - before.geom.x)) return;
+		if (after && tooNarrow(after, after.geom.x + after.geom.width - right)) return;
+		if (before) before.geom = { ...before.geom, width: left - before.geom.x };
+		if (after) after.geom = { ...after.geom, x: right, width: after.geom.x + after.geom.width - right };
+		this.geom = { x: left, y: parent.geom.y, width: right - left, height: parent.geom.height };
 	}
 
 	split(direction) {
@@ -91,18 +120,23 @@ class FakeTile {
 		}
 		let home = neighbour;
 		while (home.tiles.length > 0) home = home.tiles[0];
-		for (const w of windowsUnder(this)) home.take(w);
+		for (const w of windowsUnder(this)) {
+			if (this.strands) untile(w);
+			else home.take(w);
+		}
 		this.parent = null;
 	}
 
 	manage(window) {
 		manageCalls.push(window.name);
+		if (window.manageThrows) throw new Error("manage failed for " + window.name);
+		if (this.refuses.includes(window.name)) return false;
 		this.take(window);
 		return true;
 	}
 
 	take(window) {
-		if (window.tile) window.tile.windows = window.tile.windows.filter((w) => w !== window);
+		untile(window);
 		this.windows.push(window);
 		window.tile = this;
 	}
@@ -110,8 +144,17 @@ class FakeTile {
 
 let manageCalls = [];
 
+function untile(window) {
+	if (window.tile) window.tile.windows = window.tile.windows.filter((w) => w !== window);
+	window.tile = null;
+}
+
 function windowsUnder(tile) {
 	return [...tile.windows, ...tile.tiles.flatMap(windowsUnder)];
+}
+
+function tilesUnder(tile) {
+	return [tile, ...tile.tiles.flatMap(tilesUnder)];
 }
 
 /** A root holding a horizontal row of columns with these widths. */
@@ -126,7 +169,7 @@ function row(widths) {
 }
 
 function windowIn(name, tile) {
-	const window = { name, tile: null };
+	const window = { name, resourceClass: name, tile: null };
 	if (tile) tile.take(window);
 	return window;
 }
@@ -215,13 +258,15 @@ test("set: the target is returned whatever the current layout", () => {
 	}
 });
 
-test("nearestColumn picks the column whose centre is nearest, ties go left", () => {
-	assert.equal(script.nearestColumn(0.1, [0.5, 0.5]), 0);
-	assert.equal(script.nearestColumn(0.9, [0.5, 0.5]), 1);
-	assert.equal(script.nearestColumn(0.5, [0.5, 0.5]), 0);
-	assert.equal(script.nearestColumn(0.5, [1 / 3, 1 / 3, 1 / 3]), 1);
-	assert.equal(script.nearestColumn(5 / 6, [1 / 3, 1 / 3, 1 / 3]), 2);
-	assert.equal(script.nearestColumn(0.125, [0.25, 0.5, 0.25]), 0);
+test("nearestFirst orders columns by how near their centre is, ties go left", () => {
+	const order = (centre, centres) => [...script.nearestFirst(centre, centres)];
+	assert.deepEqual(order(0.1, [0.25, 0.75]), [0, 1]);
+	assert.deepEqual(order(0.9, [0.25, 0.75]), [1, 0]);
+	assert.deepEqual(order(0.5, [0.25, 0.75]), [0, 1]);
+	assert.deepEqual(order(0.5, [1 / 6, 0.5, 5 / 6]), [1, 0, 2]);
+	assert.deepEqual(order(5 / 6, [1 / 6, 0.5, 5 / 6]), [2, 1, 0]);
+	assert.deepEqual(order(0.125, [0.125, 0.5, 0.875]), [0, 1, 2]);
+	assert.deepEqual(order(0.5, []), []);
 });
 
 test("apply: 3 to 2 columns keeps left left and right right; the middle goes left", () => {
@@ -376,4 +421,139 @@ test("main: a failure is reported on console.error, not thrown", () => {
 	const errors = run(config("set", "thirds"), root);
 	assert.equal(errors.length, 1);
 	assert.match(errors[0], /^opendeck-utilities layout: .*boom/);
+});
+
+/** A root whose second column holds two rows, with a window in each tile; every tile strands its windows when removed. */
+function nestedRoot() {
+	const root = row([0.5, 0.5]);
+	const nested = root.tiles[1];
+	nested.layoutDirection = VERTICAL;
+	nested.tiles = [
+		new FakeTile(nested, { x: 0.5, y: 0, width: 0.5, height: 0.5 }),
+		new FakeTile(nested, { x: 0.5, y: 0.5, width: 0.5, height: 0.5 }),
+	];
+	const windows = [windowIn("left", root.tiles[0]), windowIn("top", nested.tiles[0]), windowIn("bottom", nested.tiles[1])];
+	for (const tile of tilesUnder(root)) tile.strands = true;
+	return { root, windows };
+}
+
+test("main: a nested root whose rebuild fails leaves every window tiled", () => {
+	const failures = {
+		throws() {
+			throw new Error("split refused");
+		},
+		refuses() {
+			return undefined;
+		},
+	};
+	for (const [how, split] of Object.entries(failures)) {
+		const { root, windows } = nestedRoot();
+		root.split = split;
+		const errors = run(config("set", "thirds"), root);
+		for (const w of windows) assert.ok(w.tile, `${how}: ${w.name} is tiled`);
+		assert.ok(
+			errors.some((e) => /^opendeck-utilities layout: /.test(e)),
+			`${how}: the failure is reported: ${errors}`,
+		);
+	}
+});
+
+test("main: a flat root whose split fails puts every window back in the nearest column", () => {
+	const root = row([0.5, 0.5]);
+	const left = windowIn("left", root.tiles[0]);
+	const right = windowIn("right", root.tiles[1]);
+	// The split is refused and, at worst, strands the windows.
+	root.tiles[1].split = () => {
+		untile(left);
+		untile(right);
+	};
+	const errors = run(config("set", "thirds"), root);
+	assert.equal(left.tile, root.tiles[0]);
+	assert.equal(right.tile, root.tiles[1]);
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /^opendeck-utilities layout: .*could not make 3 columns/);
+});
+
+test("main: a window whose manage throws does not stop the others", () => {
+	manageCalls = [];
+	const root = row([1 / 3, 1 / 3, 1 / 3]);
+	const left = windowIn("left", root.tiles[0]);
+	const bad = windowIn("bad", root.tiles[1]);
+	bad.manageThrows = true;
+	const right = windowIn("right", root.tiles[2]);
+	const errors = run(config("set", "wide"), root);
+	assertColumns(root, [0.25, 0.5, 0.25]);
+	assert.equal(left.tile, root.tiles[0]);
+	assert.equal(right.tile, root.tiles[2]);
+	assert.ok(manageCalls.indexOf("right") > manageCalls.indexOf("bad"), "right was managed after bad failed");
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /^opendeck-utilities layout: .*bad/);
+});
+
+test("main: a column that refuses a window sends it to the next nearest column", () => {
+	const root = row([0.5, 0.5]);
+	const left = windowIn("left", root.tiles[0]);
+	const right = windowIn("right", root.tiles[1]);
+	root.tiles[1].refuses = ["right"];
+	const errors = run(config("set", "halves"), root);
+	assert.equal(left.tile, root.tiles[0]);
+	assert.equal(right.tile, root.tiles[0]);
+	assert.deepEqual(errors, []);
+});
+
+test("main: a window no column takes is reported", () => {
+	const root = row([0.5, 0.5]);
+	windowIn("left", root.tiles[0]);
+	windowIn("right", root.tiles[1]);
+	for (const column of root.tiles) column.refuses = ["right"];
+	const errors = run(config("set", "halves"), root);
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /^opendeck-utilities layout: .*right/);
+});
+
+test("apply: a tile tree deeper than the cap is left as it is", () => {
+	manageCalls = [];
+	const root = new FakeTile(null, { x: 0, y: 0, width: 1, height: 1 });
+	let tile = root;
+	for (let depth = 0; depth < 20; depth++) {
+		const child = new FakeTile(tile, { x: 0, y: 0, width: 1, height: 1 });
+		tile.tiles = [child];
+		tile = child;
+	}
+	const deep = windowIn("deep", tile);
+	const top = root.tiles[0];
+	assert.throws(() => script.apply(root, [0.5, 0.5]), /deeper/);
+	assert.deepEqual(root.tiles, [top]);
+	assert.equal(deep.tile, tile);
+	assert.deepEqual(manageCalls, []);
+});
+
+test("main: a write refused on the first pass is made on the second", () => {
+	// Growing the first columns past their neighbours' far edges is refused
+	// until a later column has moved those edges out of the way.
+	const four = { mode: "set", target: "four", layouts: [{ id: "four", widths: [0.3, 0.3, 0.3, 0.1] }], tolerance: 0.08 };
+	const root = row([0.1, 0.1, 0.1, 0.7]);
+	const errors = run(four, root);
+	assert.deepEqual(errors, []);
+	assertColumns(root, [0.3, 0.3, 0.3, 0.1]);
+	assert.equal(root.tiles[0].writes, 2, "the first column was written twice");
+});
+
+test("main: a column that cannot shrink is reported and windows go by the actual columns", () => {
+	const root = row([0.2, 0.5, 0.3]);
+	const a = windowIn("a", root.tiles[0]);
+	const b = windowIn("b", root.tiles[1]);
+	const c = windowIn("c", root.tiles[2]);
+	// A window in the middle column is too wide for it to go below 0.6.
+	root.tiles[1].minWidth = 0.6;
+	const errors = run(config("set", "halves"), root);
+	assert.equal(root.tiles.length, 2);
+	assert.deepEqual(widthsOf(root), [0.2, 0.8]);
+	// b was centred at 0.45: nearer the target left column (0.25) but the actual
+	// right one (centred at 0.6).
+	assert.equal(a.tile, root.tiles[0]);
+	assert.equal(b.tile, root.tiles[1]);
+	assert.equal(c.tile, root.tiles[1]);
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /^opendeck-utilities layout: .*0\.5, 0\.5.*0\.2, 0\.8/);
 });

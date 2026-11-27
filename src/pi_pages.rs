@@ -302,6 +302,15 @@ fn layout_page_writes_the_settings_keys() {
     }
 }
 
+/// A stored value the page has no option for shows the default, as the
+/// plugin reads it, through the tested helper (tests/pi.test.mjs), never a
+/// blank select.
+#[test]
+fn layout_page_shows_the_default_for_an_unknown_value() {
+    assert!(LAYOUT.contains("PI.optionOr(settings[id], values, fallback)"));
+    assert!(!LAYOUT.contains("settings[id] ?? fallback"));
+}
+
 #[test]
 fn every_page_loads_the_shared_script() {
     for page in [AUDIO, BRIGHTNESS, LAYOUT, PROFILE] {

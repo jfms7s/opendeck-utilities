@@ -46,8 +46,10 @@ actions for keys and dials:
   25·50·25 (a wide centre column). A key either always sets one layout or cycles
   through the three; columns that have drifted from a layout are put back exactly
   before the next press moves on. The key shows the chosen layout's columns, or
-  the cycle order; it does not show which layout is active. If KWin can't be
-  reached the key flashes an alert; on macOS it shows "Linux only".
+  the cycle order; it does not show which layout is active. The key flashes an
+  alert only when KWin can't be reached or won't load or run the script; a problem
+  inside KWin (see [How window layouts work](#how-window-layouts-work)) is only
+  logged. On macOS it shows "Linux only".
 
 ## Requirements
 
@@ -65,7 +67,9 @@ actions for keys and dials:
   item below has not been run yet.
 - Window Layout: a KDE Plasma 6 session (KWin 6 on the session D-Bus as
   `org.kde.KWin`; its scripting calls were checked on KWin 6.8.2) and
-  `$XDG_RUNTIME_DIR` set; nothing else to install.
+  `$XDG_RUNTIME_DIR` set; nothing else to install. Not expected to work from the
+  Flatpak OpenDeck (untested): KWin, outside the sandbox, has to read the script
+  file the plugin writes under `$XDG_RUNTIME_DIR`.
 
 **macOS** (Apple Silicon):
 
@@ -106,10 +110,20 @@ the script to a private file under `$XDG_RUNTIME_DIR` and removes it afterwards.
 This needs KDE Plasma 6 on Linux. The layout applies to the screen in use
 (KWin's active screen) on the current virtual desktop only. Windows that sit in a
 tile move to the new column nearest the one they were in, so a window on the left
-stays on the left; floating and maximized windows are left alone. A KWin script
-can't hand anything back, so the key does not show which layout is active. If
-the script can't be run (no KWin on the bus, another desktop, a timeout), the key
-flashes an alert and the plugin log says why once.
+stays on the left; floating and maximized windows are left alone. KWin saves the
+new layout itself (on KWin 6.8.2 it is written to `kwinrc` a couple of seconds
+after a press).
+
+A KWin script can't hand anything back, so the key does not show which layout is
+active, and it can only report what goes wrong up to the point KWin runs the
+script. The key flashes an alert (and the plugin log says why, once) only when
+KWin can't be reached or won't load or run the script: no KWin on the bus,
+another desktop, a timeout. A problem inside the script, for example a column
+that can't shrink because a window in it is too wide, or a window KWin won't put
+back in a tile, is only written to KWin's log (`journalctl --user`, lines
+starting `opendeck-utilities layout:`); the key does not signal it. If the
+layout change fails part way, the script still puts each window that was tiled
+back in a tile, and logs any it couldn't.
 
 ## Installing
 

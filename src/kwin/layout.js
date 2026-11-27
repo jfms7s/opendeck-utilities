@@ -63,20 +63,20 @@ function pickTarget(config, currentWidths) {
 	return layouts[0];
 }
 
-/** Index of the column (of these widths, left to right) whose centre is nearest `centre`; ties go left. */
-function nearestColumn(centre, widths) {
-	let best = 0;
-	let bestDiff = Infinity;
-	let x = 0;
-	for (let i = 0; i < widths.length; i++) {
-		const diff = Math.abs(x + widths[i] / 2 - centre);
-		if (diff < bestDiff - TIE) {
-			best = i;
-			bestDiff = diff;
+/** Indexes into `centres` (left to right), the one nearest `centre` first; ties go left. */
+function nearestFirst(centre, centres) {
+	const remaining = [];
+	for (let i = 0; i < centres.length; i++) remaining.push(i);
+	const order = [];
+	while (remaining.length > 0) {
+		let best = 0;
+		for (let k = 1; k < remaining.length; k++) {
+			const diff = Math.abs(centres[remaining[k]] - centre);
+			if (diff < Math.abs(centres[remaining[best]] - centre) - TIE) best = k;
 		}
-		x += widths[i];
+		order.push(remaining.splice(best, 1)[0]);
 	}
-	return best;
+	return order;
 }
 
 /** True if the root is empty or a horizontal row of leaf columns. */
@@ -89,9 +89,12 @@ function isFlatRow(root) {
 	return true;
 }
 
-/** Every window in a tile under `tile`, with its tile's horizontal centre (0..1), copied out. */
+/**
+ * Every window in a tile under `tile`, with its tile's horizontal centre (0..1), copied out.
+ * Throws if the tree is deeper than MAX_DEPTH, before anything has changed.
+ */
 function collectWindows(tile, out, depth) {
-	if (depth > MAX_DEPTH) return out;
+	if (depth > MAX_DEPTH) throw new Error("the tile tree is deeper than " + MAX_DEPTH + ", left as it is");
 	const windows = tile.windows;
 	if (windows.length > 0) {
 		// relativeGeometry is live in KWin: read the numbers now, before anything moves.
@@ -122,9 +125,43 @@ function resize(root, count) {
 	}
 }
 
-/** Makes the root a row of columns of these widths and puts every tiled window back in the nearest one. */
-function apply(root, widths) {
-	const placed = collectWindows(root, [], 0);
+/** Asks each column to take its width, left to right. */
+function writeWidths(columns, widths) {
+	let x = 0;
+	for (let i = 0; i < widths.length; i++) {
+		columns[i].relativeGeometry = { x: x, y: 0, width: widths[i], height: 1 };
+		x += widths[i];
+	}
+}
+
+/** The widths the columns actually have, copied out. */
+function readWidths(columns) {
+	const widths = [];
+	for (const column of columns) widths.push(column.relativeGeometry.width);
+	return widths;
+}
+
+/** True if some column is further than EXACT from its target width. */
+function differs(actual, target) {
+	for (let i = 0; i < target.length; i++) {
+		if (Math.abs(actual[i] - target[i]) > EXACT) return true;
+	}
+	return false;
+}
+
+function formatWidths(widths) {
+	const out = [];
+	for (const width of widths) out.push(String(Number(width.toFixed(3))));
+	return out.join(", ");
+}
+
+/**
+ * Makes the root a row of columns of these widths. KWin refuses a write that
+ * would squeeze a neighbour to its minimum without saying so, and a refused
+ * write can go through once its neighbour has moved: so write, read back, and
+ * write once more if they differ. A layout that still differs is reported.
+ */
+function rebuild(root, widths) {
 	if (!isFlatRow(root)) clear(root);
 	resize(root, widths.length);
 	if (root.tiles.length !== widths.length || !isFlatRow(root)) {
@@ -132,14 +169,98 @@ function apply(root, widths) {
 	}
 	const columns = [];
 	for (const tile of root.tiles) columns.push(tile);
-	let x = 0;
-	for (let i = 0; i < widths.length; i++) {
-		columns[i].relativeGeometry = { x: x, y: 0, width: widths[i], height: 1 };
-		x += widths[i];
+	writeWidths(columns, widths);
+	if (!differs(readWidths(columns), widths)) return;
+	writeWidths(columns, widths);
+	const actual = readWidths(columns);
+	if (differs(actual, widths)) {
+		console.error(
+			"opendeck-utilities layout: wanted columns " +
+				formatWidths(widths) +
+				", got " +
+				formatWidths(actual) +
+				" (a window may be too wide for its column to shrink)",
+		);
 	}
-	for (const entry of placed) {
-		columns[nearestColumn(entry.centre, widths)].manage(entry.window);
+}
+
+/**
+ * The tiles to try for a window centred at `centre`, best first: the root's
+ * leaf columns, nearest by their actual geometry first; if it has none, the
+ * first leaf under it (the root itself if it has no children).
+ */
+function homes(root, centre) {
+	const columns = [];
+	const centres = [];
+	for (const tile of root.tiles) {
+		if (tile.tiles.length > 0) continue;
+		const geometry = tile.relativeGeometry;
+		columns.push(tile);
+		centres.push(geometry.x + geometry.width / 2);
 	}
+	if (columns.length > 0) {
+		const order = [];
+		for (const i of nearestFirst(centre, centres)) order.push(columns[i]);
+		return order;
+	}
+	let leaf = root;
+	for (let depth = 0; depth < MAX_DEPTH && leaf.tiles.length > 0; depth++) leaf = leaf.tiles[0];
+	return [leaf];
+}
+
+/** True if `tile` took `window`; a throw counts as a refusal. */
+function tryManage(tile, window) {
+	try {
+		return tile.manage(window) !== false;
+	} catch (error) {
+		return false;
+	}
+}
+
+function describe(window) {
+	try {
+		return String(window.resourceClass || window.caption || "a window");
+	} catch (error) {
+		return "a window";
+	}
+}
+
+/** Puts each window in the best tile that takes it; reports the ones none would. */
+function place(root, entries) {
+	const lost = [];
+	for (const entry of entries) {
+		let tiles;
+		try {
+			tiles = homes(root, entry.centre);
+		} catch (error) {
+			tiles = [root];
+		}
+		let tiled = false;
+		for (const tile of tiles) {
+			if (tryManage(tile, entry.window)) {
+				tiled = true;
+				break;
+			}
+		}
+		if (!tiled) lost.push(describe(entry.window));
+	}
+	if (lost.length > 0) console.error("opendeck-utilities layout: could not tile " + lost.join(", "));
+}
+
+/**
+ * Makes the root a row of columns of these widths and puts every tiled window
+ * back in the nearest one. Whatever fails once the windows are collected, they
+ * are all put back in a tile before the error goes on to the caller.
+ */
+function apply(root, widths) {
+	const placed = collectWindows(root, [], 0);
+	try {
+		rebuild(root, widths);
+	} catch (error) {
+		place(root, placed);
+		throw error;
+	}
+	place(root, placed);
 }
 
 /** The column widths in use, or [] if the root is not a row of columns. */
