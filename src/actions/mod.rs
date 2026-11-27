@@ -1,11 +1,13 @@
-//! The three `openaction` actions. Each `Action` impl is a thin adapter: it
-//! turns the `Instance` into a `Control` and calls the action's own methods,
-//! which reach the deck only through `crate::ui::Ui` and OpenDeck only
-//! through `crate::host::Host` - so the gesture handling runs under test.
+//! The plugin's `openaction` actions, one module each. Each `Action` impl
+//! is a thin adapter: it turns the `Instance` into a `Control` and calls the
+//! action's own methods, which reach the deck only through `crate::ui::Ui`
+//! and OpenDeck only through `crate::host::Host` - so the gesture handling
+//! runs under test.
 
 pub mod audio;
 pub mod brightness;
 pub mod dnd;
+pub mod layout;
 pub mod media;
 pub mod profile;
 
@@ -71,6 +73,10 @@ impl<S: Clone> Instances<S> {
         self.map.remove(id);
     }
 
+    pub fn contains(&self, id: &str) -> bool {
+        self.map.contains_key(id)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -130,6 +136,7 @@ mod tests {
             <audio::AudioAction as Action>::UUID,
             <brightness::BrightnessAction as Action>::UUID,
             <dnd::DndAction as Action>::UUID,
+            <layout::LayoutAction as Action>::UUID,
             <media::MediaAction as Action>::UUID,
             <profile::ProfileAction as Action>::UUID,
         ];
@@ -146,7 +153,9 @@ mod tests {
         let mut snap = r.snapshot();
         snap.sort_by(|x, y| x.0.id.cmp(&y.0.id));
         assert_eq!(snap.iter().map(|(_, s)| *s).collect::<Vec<_>>(), vec![2, 3]);
+        assert!(r.contains("a") && !r.contains("c"));
         r.remove("a");
+        assert!(!r.contains("a"));
         r.remove("b");
         assert!(r.is_empty());
     }

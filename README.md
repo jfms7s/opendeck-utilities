@@ -41,6 +41,15 @@ actions for keys and dials:
   to the next track. The dial follows the playing player (the one it already
   followed if several play), else the one it followed last, else the first by name;
   with no player it shows "Nothing playing". On macOS it shows "Linux only".
+- **Window Layout** (keys, KDE Plasma 6 on Linux only) - sets the columns of
+  KWin's custom tile layout in one press: 1/2 (two halves), 1/3 (three thirds) or
+  25·50·25 (a wide centre column). A key either always sets one layout or cycles
+  through the three; columns that have drifted from a layout are put back exactly
+  before the next press moves on. The key shows the chosen layout's columns, or
+  the cycle order; it does not show which layout is active. The key flashes an
+  alert only when KWin can't be reached or won't load or run the script; a problem
+  inside KWin (see [How window layouts work](#how-window-layouts-work)) is only
+  logged. On macOS it shows "Linux only".
 
 ## Requirements
 
@@ -56,6 +65,11 @@ actions for keys and dials:
   `org.freedesktop.Flatpak`; brightness and profile requests run OpenDeck's own
   binary inside the sandbox. The Flatpak path is unit-tested only; its checklist
   item below has not been run yet.
+- Window Layout: a KDE Plasma 6 session (KWin 6 on the session D-Bus as
+  `org.kde.KWin`; its scripting calls were checked on KWin 6.8.2) and
+  `$XDG_RUNTIME_DIR` set; nothing else to install. Not expected to work from the
+  Flatpak OpenDeck (untested): KWin, outside the sandbox, has to read the script
+  file the plugin writes under `$XDG_RUNTIME_DIR`.
 
 **macOS** (Apple Silicon):
 
@@ -84,6 +98,32 @@ the plugin log says why. If those files can't be read at all (config folder
 not found, or a format change in a newer OpenDeck), requests are still sent
 but can't be confirmed: the plugin logs that once instead of alerting on
 every press.
+
+## How window layouts work
+
+KWin has no call that sets a tile layout, so a Window Layout press runs a small
+script inside KWin through its scripting interface on the session D-Bus
+(`org.kde.KWin`, `/Scripting`: load, run, unload). The script is a fixed file
+shipped in the plugin plus a line of settings built from the plugin's own table
+of layouts; nothing typed into the settings page reaches it as code. It writes
+the script to a private file under `$XDG_RUNTIME_DIR` and removes it afterwards.
+This needs KDE Plasma 6 on Linux. The layout applies to the screen in use
+(KWin's active screen) on the current virtual desktop only. Windows that sit in a
+tile move to the new column nearest the one they were in, so a window on the left
+stays on the left; floating and maximized windows are left alone. KWin saves the
+new layout itself (on KWin 6.8.2 it is written to `kwinrc` a couple of seconds
+after a press).
+
+A KWin script can't hand anything back, so the key does not show which layout is
+active, and it can only report what goes wrong up to the point KWin runs the
+script. The key flashes an alert (and the plugin log says why, once) only when
+KWin can't be reached or won't load or run the script: no KWin on the bus,
+another desktop, a timeout. A problem inside the script, for example a column
+that can't shrink because a window in it is too wide, or a window KWin won't put
+back in a tile, is only written to KWin's log (`journalctl --user`, lines
+starting `opendeck-utilities layout:`); the key does not signal it. If the
+layout change fails part way, the script still puts each window that was tiled
+back in a tile, and logs any it couldn't.
 
 ## Installing
 
@@ -205,6 +245,19 @@ maintainer's project notes (kept outside this repository), which the release not
       ("paused · …") and plays again; tapping the strip skips to the next track.
 - [ ] With every player closed, the strip shows "Nothing playing".
 
+**Window Layout** (keys, Linux with KDE Plasma 6)
+
+- [ ] Three keys set to "Set one layout" with 1/2, 1/3 and 25·50·25: each press
+      gives that many columns at those widths on the active screen (`Meta+T` shows
+      them), and a window tiled on the left stays on the left.
+- [ ] A key set to "Cycle through the layouts" moves to the next layout in the
+      order 1/2, 1/3, 25·50·25 on each press, wrapping round: three presses come
+      back to the layout it started on.
+- [ ] After dragging a column divider a little off a layout, one press of the
+      Cycle key puts that layout back exactly; the next press moves on.
+- [ ] With KWin's D-Bus out of reach (e.g. a non-Plasma session), a press flashes
+      the alert and the plugin log says why.
+
 **Flatpak OpenDeck** (optional; run when a Flatpak OpenDeck is available, e.g. in a VM)
 
 - [ ] With the bundle unzipped into the Flatpak's plugins folder, the plugin log says
@@ -240,7 +293,7 @@ On a Mac (Apple Silicon), with the release bundle installed through OpenDeck:
 
 ```bash
 cargo test --locked                          # unit tests (no live audio or OpenDeck needed)
-node --test tests/*.test.mjs                 # property-inspector helpers (pi.js)
+node --test tests/*.test.mjs                 # property-inspector helpers (pi.js), KWin layout script
 cargo build --release --locked --target x86_64-unknown-linux-gnu   # macOS: aarch64-apple-darwin
 node build.mjs                               # packages every built target into dist/<uuid>.sdPlugin
 cargo clippy --target aarch64-apple-darwin --all-targets   # type-checks the macOS code from Linux (rustup target add aarch64-apple-darwin)

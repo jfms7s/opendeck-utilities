@@ -5,6 +5,7 @@
 
 pub mod dnd;
 pub mod icons;
+pub mod layout;
 pub mod level;
 pub mod media;
 pub mod profile;

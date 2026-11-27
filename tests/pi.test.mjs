@@ -6,9 +6,17 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
-const { mergeSubset, clampInt, volumeLimit, applyCapabilities, brightnessPayload, audioNumbers, keepGesture, schedulePayload } = require(
-	"../assets/propertyInspector/pi.js",
-);
+const {
+	mergeSubset,
+	clampInt,
+	volumeLimit,
+	applyCapabilities,
+	brightnessPayload,
+	audioNumbers,
+	keepGesture,
+	schedulePayload,
+	optionOr,
+} = require("../assets/propertyInspector/pi.js");
 
 test("a stored name with no checkbox survives an unrelated save", () => {
 	// Headset H is unplugged, so only A and B are listed; the user edits the label.
@@ -76,6 +84,17 @@ function pageDefaults(page) {
 
 const BRIGHTNESS = pageDefaults("brightness.html");
 const AUDIO = pageDefaults("audio.html");
+const LAYOUT = pageDefaults("layout.html");
+
+test("layout: a stored value with no option shows the default, a known one shows itself", () => {
+	const modes = ["cycle", "set"];
+	const layouts = ["halves", "thirds", "wide"];
+	assert.equal(optionOr("bogus", modes, LAYOUT.settings.mode), "cycle");
+	assert.equal(optionOr(undefined, modes, LAYOUT.settings.mode), "cycle");
+	assert.equal(optionOr(3, layouts, LAYOUT.settings.layout), "wide");
+	assert.equal(optionOr("set", modes, LAYOUT.settings.mode), "set");
+	assert.equal(optionOr("halves", layouts, LAYOUT.settings.layout), "halves");
+});
 
 test("brightness: 300 saves 100 and selects pass through", () => {
 	const p = brightnessPayload({ key_op: "set", strip_tap: "none", value: "300", step: "5", preset_a: "0", preset_b: "50" }, BRIGHTNESS);

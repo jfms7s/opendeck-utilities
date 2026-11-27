@@ -7,6 +7,8 @@ mod cycle;
 mod dispatch;
 mod dnd;
 mod host;
+mod kwin;
+mod layout;
 mod lenient;
 mod media;
 mod notifications;
@@ -27,6 +29,7 @@ use actions::audio::AudioAction;
 use actions::brightness::BrightnessAction;
 use actions::brightness::GlobalSettingsStore;
 use actions::dnd::DndAction;
+use actions::layout::LayoutAction;
 use actions::media::MediaAction;
 use actions::profile::ProfileAction;
 use async_trait::async_trait;
@@ -75,7 +78,8 @@ async fn main() -> OpenActionResult<()> {
     ))
     .await;
     register_action(DndAction::start(platform::notifications(), ui.clone())).await;
-    register_action(MediaAction::start(platform::media(), ui)).await;
+    register_action(MediaAction::start(platform::media(), ui.clone())).await;
+    register_action(LayoutAction::start(platform::kwin(), ui)).await;
 
     let result = tokio::select! {
         result = run(std::env::args().collect()) => result,

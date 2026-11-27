@@ -5,6 +5,7 @@
 //! compiled out, so Linux tests cover the macOS branch.
 
 use crate::audio::backend::AudioBackend;
+use crate::kwin::KwinPort;
 use crate::media::MediaPort;
 use crate::notifications::NotificationsPort;
 use std::path::PathBuf;
@@ -37,6 +38,15 @@ pub fn media() -> Arc<dyn MediaPort> {
     return crate::media::mpris::MprisMedia::start(None);
     #[cfg(not(target_os = "linux"))]
     return Arc::new(crate::media::Unsupported::default());
+}
+
+/// KWin scripting: the session bus on Linux; nothing elsewhere (the Window
+/// Layout key says "Linux only").
+pub fn kwin() -> Arc<dyn KwinPort> {
+    #[cfg(target_os = "linux")]
+    return Arc::new(crate::kwin::scripting::KwinScripting::session());
+    #[cfg(not(target_os = "linux"))]
+    return Arc::new(crate::kwin::Unsupported);
 }
 
 /// The executable of the process that started the plugin (normally OpenDeck).

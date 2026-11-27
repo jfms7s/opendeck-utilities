@@ -9,12 +9,14 @@ use crate::audio::settings::{self, AudioSettings, OpKind, RotateKind};
 use crate::audio::target::TargetKind;
 use crate::brightness::{self, BrightnessSettings, KeyOp, StripTap};
 use crate::controller::Controller;
+use crate::layout::{Layout, LayoutSettings, Mode};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::ops::RangeInclusive;
 
 const AUDIO: &str = include_str!("../assets/propertyInspector/audio.html");
 const BRIGHTNESS: &str = include_str!("../assets/propertyInspector/brightness.html");
+const LAYOUT: &str = include_str!("../assets/propertyInspector/layout.html");
 const PROFILE: &str = include_str!("../assets/propertyInspector/profile.html");
 const PI_JS: &str = include_str!("../assets/propertyInspector/pi.js");
 
@@ -268,8 +270,50 @@ fn profile_page_writes_the_settings_keys_and_reads_the_choices() {
 }
 
 #[test]
+fn layout_defaults_and_options_match_the_plugin() {
+    let d = page_json(LAYOUT, "defaults");
+    assert_eq!(
+        d["settings"],
+        serde_json::to_value(LayoutSettings::default()).unwrap()
+    );
+    all_parse_as(&select_options(LAYOUT, "mode"), &Mode::ALL);
+    all_parse_as(&select_options(LAYOUT, "layout"), &Layout::ALL);
+    // Offered in cycle order, each named as on the key.
+    let ids: Vec<_> = Layout::ALL.iter().map(|l| l.id()).collect();
+    assert_eq!(select_options(LAYOUT, "layout"), ids);
+    for layout in Layout::ALL {
+        let option = format!(r#"<option value="{}">{} ("#, layout.id(), layout.label());
+        assert!(LAYOUT.contains(&option), "{option}");
+    }
+    let order: Vec<_> = Layout::ALL.iter().map(|l| l.label()).collect();
+    assert!(LAYOUT.contains(&order.join(" → ")), "the cycle hint");
+}
+
+#[test]
+fn layout_page_writes_the_settings_keys() {
+    let rust = serde_json::to_value(LayoutSettings::default()).unwrap();
+    let keys: Vec<_> = rust.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    for key in keys {
+        assert!(
+            LAYOUT.contains(&format!(r#"{key}: byId("{key}").value"#)),
+            "{key}"
+        );
+    }
+}
+
+/// A stored value the page has no option for shows the default, as the
+/// plugin reads it, through the tested helper (tests/pi.test.mjs), never a
+/// blank select.
+#[test]
+fn layout_page_shows_the_default_for_an_unknown_value() {
+    assert!(LAYOUT.contains("PI.optionOr(settings[id], values, fallback)"));
+    assert!(!LAYOUT.contains("settings[id] ?? fallback"));
+}
+
+#[test]
 fn every_page_loads_the_shared_script() {
-    for page in [AUDIO, BRIGHTNESS, PROFILE] {
+    for page in [AUDIO, BRIGHTNESS, LAYOUT, PROFILE] {
         assert!(page.contains(r#"<script src="pi.js"></script>"#));
     }
 }
