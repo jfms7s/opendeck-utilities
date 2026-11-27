@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn columns_follow_the_layout_proportions() {
-        let svg = view("25·50·25", &[0.25, 0.5, 0.25], "press to set");
+        let svg = view("1/4", &[0.25, 0.5, 0.25], "press to set");
         let r = rects(&svg);
         assert_eq!(r.len(), 3, "{svg}");
         assert!((r[1].1 - 2.0 * r[0].1).abs() < 0.2, "{r:?}");
@@ -118,26 +118,28 @@ mod tests {
         }
         let (last_x, last_w) = r[2];
         assert!(r[0].0 >= 0.0 && last_x + last_w <= 100.0, "{r:?}");
-        assert!(svg.contains(">25·50·25<"));
+        assert!(svg.contains(">1/4<"));
         assert!(svg.contains(">press to set<"));
     }
 
     #[test]
-    fn halves_and_thirds_draw_equal_columns() {
-        for n in [2, 3] {
-            let r = rects(&view("x", &vec![1.0 / n as f64; n], ""));
-            assert_eq!(r.len(), n);
-            assert!(r.iter().all(|c| (c.1 - r[0].1).abs() < 0.2), "{r:?}");
-        }
+    fn thirds_draw_equal_columns_and_fifths_a_wide_middle() {
+        let r = rects(&view("1/3", &[1.0 / 3.0; 3], ""));
+        assert_eq!(r.len(), 3);
+        assert!(r.iter().all(|c| (c.1 - r[0].1).abs() < 0.2), "{r:?}");
+        let r = rects(&view("1/5", &[0.2, 0.6, 0.2], ""));
+        assert_eq!(r.len(), 3);
+        assert!((r[1].1 - 3.0 * r[0].1).abs() < 0.3, "{r:?}");
+        assert!((r[0].1 - r[2].1).abs() < 0.2, "{r:?}");
     }
 
     #[test]
     fn cycle_has_a_mark_and_no_columns() {
-        let svg = view(CYCLE_TITLE, &[], "1/2 → 1/3 → 25·50·25");
+        let svg = view(CYCLE_TITLE, &[], "1/3 → 1/4 → 1/5");
         assert!(rects(&svg).is_empty());
         assert!(svg.contains("<path"));
         assert!(svg.contains(">Cycle<"));
-        assert!(svg.contains("1/2 → 1/3 → 25·50·25"));
+        assert!(svg.contains("1/3 → 1/4 → 1/5"));
     }
 
     #[test]
