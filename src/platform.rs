@@ -42,8 +42,6 @@ pub fn media() -> Arc<dyn MediaPort> {
 
 /// KWin scripting: the session bus on Linux; nothing elsewhere (the Window
 /// Layout key says "Linux only").
-// Used by actions/layout.rs (next commit).
-#[allow(dead_code)]
 pub fn kwin() -> Arc<dyn KwinPort> {
     #[cfg(target_os = "linux")]
     return Arc::new(crate::kwin::scripting::KwinScripting::session());

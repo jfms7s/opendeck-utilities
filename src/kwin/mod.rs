@@ -38,3 +38,57 @@ impl KwinPort for Unsupported {
         Err("KWin scripting is Linux only".into())
     }
 }
+
+#[cfg(test)]
+pub mod fake {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// KWin in memory: records every script it is given, in order.
+    pub struct FakeKwin {
+        supported: bool,
+        scripts: Mutex<Vec<String>>,
+        /// Every run fails with this message.
+        pub fail: Mutex<Option<String>>,
+        /// Hangs every run, after recording it, until released (a KWin
+        /// that takes its time).
+        pub hang: tokio::sync::Mutex<()>,
+    }
+
+    impl Default for FakeKwin {
+        fn default() -> Self {
+            Self::with_support(true)
+        }
+    }
+
+    impl FakeKwin {
+        /// `false`: a platform without KWin.
+        pub fn with_support(supported: bool) -> Self {
+            Self {
+                supported,
+                scripts: Mutex::default(),
+                fail: Mutex::new(None),
+                hang: tokio::sync::Mutex::new(()),
+            }
+        }
+
+        pub fn scripts(&self) -> Vec<String> {
+            self.scripts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl KwinPort for FakeKwin {
+        fn supported(&self) -> bool {
+            self.supported
+        }
+        async fn run_script(&self, source: &str) -> Result<(), String> {
+            self.scripts.lock().unwrap().push(source.to_string());
+            drop(self.hang.lock().await);
+            match self.fail.lock().unwrap().clone() {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
+        }
+    }
+}

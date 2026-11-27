@@ -6,6 +6,7 @@
 pub mod audio;
 pub mod brightness;
 pub mod dnd;
+pub mod layout;
 pub mod media;
 pub mod profile;
 
@@ -69,6 +70,10 @@ impl<S: Clone> Instances<S> {
 
     pub fn remove(&self, id: &str) {
         self.map.remove(id);
+    }
+
+    pub fn contains(&self, id: &str) -> bool {
+        self.map.contains_key(id)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -146,7 +151,9 @@ mod tests {
         let mut snap = r.snapshot();
         snap.sort_by(|x, y| x.0.id.cmp(&y.0.id));
         assert_eq!(snap.iter().map(|(_, s)| *s).collect::<Vec<_>>(), vec![2, 3]);
+        assert!(r.contains("a") && !r.contains("c"));
         r.remove("a");
+        assert!(!r.contains("a"));
         r.remove("b");
         assert!(r.is_empty());
     }

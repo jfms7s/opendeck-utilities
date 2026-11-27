@@ -6,6 +6,7 @@
 use crate::actions::Control;
 use crate::controller::Controller;
 use crate::render::dnd::{self, DndView};
+use crate::render::layout::{self, LayoutView};
 use crate::render::level::{self, LevelView};
 use crate::render::media::{self, NowPlayingView};
 use crate::render::profile::{self, ProfileView};
@@ -21,6 +22,8 @@ pub trait Ui: Send + Sync {
     async fn show_profile(&self, control: &Control, view: &ProfileView);
     /// A key only (the action has no dial layout).
     async fn show_dnd(&self, control: &Control, view: &DndView);
+    /// A key only (the action has no dial layout).
+    async fn show_layout(&self, control: &Control, view: &LayoutView);
     /// A dial only (the action has no key tile).
     async fn show_media(&self, control: &Control, view: &NowPlayingView);
     async fn alert(&self, id: &str);
@@ -111,6 +114,11 @@ impl Ui for OpenDeckUi {
             .await;
     }
 
+    async fn show_layout(&self, control: &Control, view: &LayoutView) {
+        self.show(control, Frame::Image(layout::tile_image(view)))
+            .await;
+    }
+
     async fn show_media(&self, control: &Control, view: &NowPlayingView) {
         self.show(control, Frame::Feedback(media::strip_feedback(view)))
             .await;
@@ -182,6 +190,12 @@ pub mod fake {
         }
         async fn show_dnd(&self, control: &Control, view: &DndView) {
             self.push(format!("dnd {} {} {}", control.id, view.state, view.hint));
+        }
+        async fn show_layout(&self, control: &Control, view: &LayoutView) {
+            self.push(format!(
+                "layout {} {} {}",
+                control.id, view.title, view.hint
+            ));
         }
         async fn show_media(&self, control: &Control, view: &NowPlayingView) {
             self.push(format!(

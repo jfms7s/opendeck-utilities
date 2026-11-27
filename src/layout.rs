@@ -3,7 +3,7 @@
 //! is behind the port in `kwin/`.
 
 use crate::lenient::Fields;
-use crate::render::layout::LayoutView;
+use crate::render::layout::{CYCLE_TITLE, LayoutView};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The script a press runs; `script` puts its `CONFIG` in front.
@@ -164,7 +164,7 @@ pub fn view(settings: &LayoutSettings, supported: bool) -> LayoutView {
             hint: "press to set".to_string(),
         },
         Mode::Cycle => LayoutView {
-            title: "Cycle".to_string(),
+            title: CYCLE_TITLE.to_string(),
             columns: Vec::new(),
             hint: Layout::ALL
                 .into_iter()
