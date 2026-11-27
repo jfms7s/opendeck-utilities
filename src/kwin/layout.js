@@ -17,27 +17,27 @@ const MAX_STEPS = 32;
 // Deepest tile tree walked when collecting windows.
 const MAX_DEPTH = 16;
 
-/** The total difference from `widths` to `layout`, or null if any column is further than `limit`. */
-function distance(layout, widths, limit) {
+/** The largest column difference from `widths` to `layout`, or null if the column counts differ or any column is further than `limit`. */
+function deviation(layout, widths, limit) {
 	if (layout.widths.length !== widths.length) return null;
-	let total = 0;
+	let largest = 0;
 	for (let i = 0; i < widths.length; i++) {
 		const diff = Math.abs(layout.widths[i] - widths[i]);
 		if (diff > limit) return null;
-		total += diff;
+		if (diff > largest) largest = diff;
 	}
-	return total;
+	return largest;
 }
 
-/** Index of the layout nearest to `widths` with every column within `limit`, or -1. */
+/** Index of the layout nearest to `widths` (smallest largest column difference) with every column within `limit`, or -1. A tie goes to the earlier layout. */
 function closest(layouts, widths, limit) {
 	let best = -1;
-	let bestTotal = Infinity;
+	let bestDeviation = Infinity;
 	for (let i = 0; i < layouts.length; i++) {
-		const total = distance(layouts[i], widths, limit);
-		if (total !== null && total < bestTotal) {
+		const found = deviation(layouts[i], widths, limit);
+		if (found !== null && found < bestDeviation) {
 			best = i;
-			bestTotal = total;
+			bestDeviation = found;
 		}
 	}
 	return best;
@@ -45,8 +45,9 @@ function closest(layouts, widths, limit) {
 
 /**
  * The layout to apply. Set mode: the target (null if the id is unknown).
- * Cycle mode: the layout after the one in use; the drifted-from layout if the
- * columns are only close to it; otherwise the first.
+ * Cycle mode: the layout after the one in use; if the columns are only close
+ * to some layouts, the nearest of those (restored before moving on); otherwise
+ * the first.
  */
 function pickTarget(config, currentWidths) {
 	const layouts = config.layouts;

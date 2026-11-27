@@ -11,45 +11,55 @@ const SCRIPT: &str = include_str!("kwin/layout.js");
 
 const THIRD: f64 = 1.0 / 3.0;
 
-/// A set of tile columns, left to right. Stored in settings by `id`.
+/// The id older versions stored for `Quarters`; still read, never written.
+const QUARTERS_OLD_ID: &str = "wide";
+
+/// Three tile columns, left to right; the layouts differ in the width of the
+/// two side columns (a third, a quarter, a fifth), the middle takes the rest.
+/// Stored in settings by `id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
-    Halves,
     Thirds,
-    Wide,
+    Quarters,
+    Fifths,
 }
 
 impl Layout {
     /// Cycle order.
-    pub const ALL: [Layout; 3] = [Layout::Halves, Layout::Thirds, Layout::Wide];
+    pub const ALL: [Layout; 3] = [Layout::Thirds, Layout::Quarters, Layout::Fifths];
 
     pub fn id(self) -> &'static str {
         match self {
-            Layout::Halves => "halves",
             Layout::Thirds => "thirds",
-            Layout::Wide => "wide",
+            Layout::Quarters => "quarters",
+            Layout::Fifths => "fifths",
         }
     }
 
     /// The name on the key.
     pub fn label(self) -> &'static str {
         match self {
-            Layout::Halves => "1/2",
             Layout::Thirds => "1/3",
-            Layout::Wide => "25·50·25",
+            Layout::Quarters => "1/4",
+            Layout::Fifths => "1/5",
         }
     }
 
     /// Column widths, left to right, as fractions of the screen summing to 1.
     pub fn widths(self) -> &'static [f64] {
         match self {
-            Layout::Halves => &[0.5, 0.5],
             Layout::Thirds => &[THIRD, THIRD, THIRD],
-            Layout::Wide => &[0.25, 0.5, 0.25],
+            Layout::Quarters => &[0.25, 0.5, 0.25],
+            Layout::Fifths => &[0.2, 0.6, 0.2],
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
+        let id = if id == QUARTERS_OLD_ID {
+            "quarters"
+        } else {
+            id
+        };
         Self::ALL.into_iter().find(|l| l.id() == id)
     }
 }
@@ -105,7 +115,7 @@ serde_by_id!(Mode, "mode");
 pub struct LayoutSettings {
     /// Default: cycle.
     pub mode: Mode,
-    /// Set mode: the layout a press applies. Default: wide.
+    /// Set mode: the layout a press applies. Default: quarters.
     pub layout: Layout,
 }
 
@@ -113,7 +123,7 @@ impl Default for LayoutSettings {
     fn default() -> Self {
         Self {
             mode: Mode::Cycle,
-            layout: Layout::Wide,
+            layout: Layout::Quarters,
         }
     }
 }
@@ -196,9 +206,9 @@ mod tests {
     }
 
     #[test]
-    fn defaults_cycle_from_wide() {
+    fn defaults_cycle_from_quarters() {
         let d = LayoutSettings::default();
-        assert_eq!((d.mode, d.layout), (Mode::Cycle, Layout::Wide));
+        assert_eq!((d.mode, d.layout), (Mode::Cycle, Layout::Quarters));
         assert_eq!(settings(json!({})), d);
     }
 
@@ -207,7 +217,7 @@ mod tests {
         let s = settings(json!({ "mode": "sideways", "layout": "thirds" }));
         assert_eq!((s.mode, s.layout), (Mode::Cycle, Layout::Thirds));
         let s = settings(json!({ "mode": "set", "layout": 5 }));
-        assert_eq!((s.mode, s.layout), (Mode::Set, Layout::Wide));
+        assert_eq!((s.mode, s.layout), (Mode::Set, Layout::Quarters));
         let s = settings(json!({ "mode": ["set"], "layout": "Halves" }));
         assert_eq!(s, LayoutSettings::default());
         assert!(serde_json::from_value::<LayoutSettings>(json!("set")).is_err());
@@ -234,6 +244,7 @@ mod tests {
             assert_eq!(Mode::from_id(mode.id()), Some(mode));
         }
         assert_eq!(Layout::from_id("Wide"), None);
+        assert_eq!(Layout::from_id("halves"), None);
         let ids: HashSet<_> = Layout::ALL.iter().map(|l| l.id()).collect();
         assert_eq!(ids.len(), Layout::ALL.len());
         let labels: HashSet<_> = Layout::ALL.iter().map(|l| l.label()).collect();
@@ -241,23 +252,44 @@ mod tests {
     }
 
     #[test]
-    fn every_layout_has_two_or_three_columns_that_fill_the_screen() {
+    fn a_stored_wide_reads_as_quarters_and_is_never_written() {
+        assert_eq!(Layout::from_id("wide"), Some(Layout::Quarters));
+        let s = settings(json!({ "mode": "set", "layout": "wide" }));
+        assert_eq!((s.mode, s.layout), (Mode::Set, Layout::Quarters));
+        assert_eq!(
+            serde_json::to_value(s).unwrap(),
+            json!({ "mode": "set", "layout": "quarters" })
+        );
+        assert!(Layout::ALL.iter().all(|l| l.id() != "wide"));
+    }
+
+    #[test]
+    fn a_stored_halves_is_unknown_and_falls_back_to_the_default() {
+        let s = settings(json!({ "mode": "set", "layout": "halves" }));
+        assert_eq!((s.mode, s.layout), (Mode::Set, Layout::Quarters));
+    }
+
+    #[test]
+    fn every_layout_has_three_columns_that_fill_the_screen() {
         for layout in Layout::ALL {
             let w = layout.widths();
-            assert!((2..=3).contains(&w.len()), "{layout:?}");
+            assert_eq!(w.len(), 3, "{layout:?}");
             assert!(w.iter().all(|&c| c > 0.0), "{layout:?}");
             let sum: f64 = w.iter().sum();
             assert!((sum - 1.0).abs() < 1e-9, "{layout:?} sums to {sum}");
+            assert_eq!(w[0], w[2], "{layout:?} has equal sides");
         }
     }
 
     #[test]
     fn the_table_is_the_one_asked_for() {
-        assert_eq!(Layout::Halves.widths(), [0.5, 0.5]);
-        assert_eq!(Layout::Wide.widths(), [0.25, 0.5, 0.25]);
-        assert_eq!(Layout::Thirds.widths().len(), 3);
+        assert_eq!(Layout::Thirds.widths(), [THIRD, THIRD, THIRD]);
+        assert_eq!(Layout::Quarters.widths(), [0.25, 0.5, 0.25]);
+        assert_eq!(Layout::Fifths.widths(), [0.2, 0.6, 0.2]);
         let labels: Vec<_> = Layout::ALL.iter().map(|l| l.label()).collect();
-        assert_eq!(labels, ["1/2", "1/3", "25·50·25"]);
+        assert_eq!(labels, ["1/3", "1/4", "1/5"]);
+        let ids: Vec<_> = Layout::ALL.iter().map(|l| l.id()).collect();
+        assert_eq!(ids, ["thirds", "quarters", "fifths"]);
     }
 
     #[test]
@@ -285,7 +317,7 @@ mod tests {
         let (config, _) = split_script(&script(&LayoutSettings::default()));
         assert_eq!(
             (&config["mode"], &config["target"]),
-            (&json!("cycle"), &json!("wide"))
+            (&json!("cycle"), &json!("quarters"))
         );
     }
 
@@ -293,7 +325,7 @@ mod tests {
     fn hostile_settings_never_reach_the_script() {
         let default = script(&LayoutSettings::default());
         for hostile in [
-            r#"wide"};process.exit();//"#,
+            r#"quarters"};process.exit();//"#,
             "</script><script>alert(1)</script>",
             "`${process.exit()}`",
             r#"";process.exit()"#,
@@ -326,7 +358,7 @@ mod tests {
         let v = view(&LayoutSettings::default(), true);
         assert_eq!(v.title, "Cycle");
         assert!(v.columns.is_empty());
-        assert_eq!(v.hint, "1/2 → 1/3 → 25·50·25");
+        assert_eq!(v.hint, "1/3 → 1/4 → 1/5");
     }
 
     #[test]
@@ -335,7 +367,7 @@ mod tests {
             let v = view(
                 &LayoutSettings {
                     mode,
-                    layout: Layout::Halves,
+                    layout: Layout::Thirds,
                 },
                 false,
             );

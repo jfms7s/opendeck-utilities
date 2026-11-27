@@ -88,12 +88,13 @@ const LAYOUT = pageDefaults("layout.html");
 
 test("layout: a stored value with no option shows the default, a known one shows itself", () => {
 	const modes = ["cycle", "set"];
-	const layouts = ["halves", "thirds", "wide"];
+	const layouts = ["thirds", "quarters", "fifths"];
 	assert.equal(optionOr("bogus", modes, LAYOUT.settings.mode), "cycle");
 	assert.equal(optionOr(undefined, modes, LAYOUT.settings.mode), "cycle");
-	assert.equal(optionOr(3, layouts, LAYOUT.settings.layout), "wide");
+	assert.equal(optionOr(3, layouts, LAYOUT.settings.layout), "quarters");
 	assert.equal(optionOr("set", modes, LAYOUT.settings.mode), "set");
-	assert.equal(optionOr("halves", layouts, LAYOUT.settings.layout), "halves");
+	assert.equal(optionOr("thirds", layouts, LAYOUT.settings.layout), "thirds");
+	assert.equal(optionOr("halves", layouts, LAYOUT.settings.layout), "quarters");
 });
 
 test("brightness: 300 saves 100 and selects pass through", () => {

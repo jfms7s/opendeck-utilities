@@ -11,12 +11,15 @@ const HORIZONTAL = 1;
 const VERTICAL = 2;
 
 const LAYOUTS = [
-	{ id: "halves", widths: [0.5, 0.5] },
 	{ id: "thirds", widths: [1 / 3, 1 / 3, 1 / 3] },
-	{ id: "wide", widths: [0.25, 0.5, 0.25] },
+	{ id: "quarters", widths: [0.25, 0.5, 0.25] },
+	{ id: "fifths", widths: [0.2, 0.6, 0.2] },
 ];
 
-function config(mode = "cycle", target = "wide") {
+/** The table plus a two-column layout, for the tests of the column machinery. */
+const WITH_TWO = [...LAYOUTS, { id: "two", widths: [0.5, 0.5] }];
+
+function config(mode = "cycle", target = "quarters") {
 	return { mode, target, layouts: LAYOUTS, tolerance: 0.08 };
 }
 
@@ -221,39 +224,58 @@ function run(cfg, root, extraWindows = []) {
 
 const script = load();
 
-test("cycle: halves goes to thirds, thirds to wide, wide wraps to halves", () => {
-	assert.equal(script.pickTarget(config(), [0.5, 0.5]).id, "thirds");
-	assert.equal(script.pickTarget(config(), [1 / 3, 1 / 3, 1 / 3]).id, "wide");
-	assert.equal(script.pickTarget(config(), [0.25, 0.5, 0.25]).id, "halves");
+test("cycle: thirds goes to quarters, quarters to fifths, fifths wraps to thirds", () => {
+	assert.equal(script.pickTarget(config(), [1 / 3, 1 / 3, 1 / 3]).id, "quarters");
+	assert.equal(script.pickTarget(config(), [0.25, 0.5, 0.25]).id, "fifths");
+	assert.equal(script.pickTarget(config(), [0.2, 0.6, 0.2]).id, "thirds");
 });
 
 test("cycle: widths a hair off an exact layout still count as that layout", () => {
-	assert.equal(script.pickTarget(config(), [0.3335, 0.333, 0.3335]).id, "wide");
+	assert.equal(script.pickTarget(config(), [0.3335, 0.333, 0.3335]).id, "quarters");
+	assert.equal(script.pickTarget(config(), [0.2005, 0.599, 0.2005]).id, "thirds");
 });
 
-test("cycle: drifted columns are restored to the layout they drifted from", () => {
-	assert.equal(script.pickTarget(config(), [0.55, 0.45]).id, "halves");
+test("cycle: an exact layout is never mistaken for a neighbour within the tolerance", () => {
+	for (const [i, layout] of LAYOUTS.entries()) {
+		const next = LAYOUTS[(i + 1) % LAYOUTS.length];
+		assert.equal(script.pickTarget(config(), layout.widths).id, next.id);
+		for (const other of LAYOUTS) {
+			if (other === layout) continue;
+			const widest = Math.max(...layout.widths.map((w, k) => Math.abs(w - other.widths[k])));
+			assert.ok(widest > 0.08, `${layout.id} is ${widest} from ${other.id}`);
+		}
+	}
+});
+
+test("cycle: drifted columns are restored to the nearest layout", () => {
+	assert.equal(script.pickTarget(config(), [0.22, 0.56, 0.22]).id, "fifths");
+	assert.equal(script.pickTarget(config(), [0.24, 0.52, 0.24]).id, "quarters");
 	assert.equal(script.pickTarget(config(), [0.3, 0.38, 0.32]).id, "thirds");
-	assert.equal(script.pickTarget(config(), [0.28, 0.45, 0.27]).id, "wide");
+	assert.equal(script.pickTarget(config(), [0.28, 0.45, 0.27]).id, "quarters");
 });
 
-test("cycle: with two layouts of the same count, the closer one is restored", () => {
-	// At 0.08 thirds and wide cannot both match, so widen the tolerance to reach both.
-	const loose = { ...config(), tolerance: 0.2 };
-	assert.equal(script.pickTarget(loose, [0.27, 0.45, 0.28]).id, "wide");
-	assert.equal(script.pickTarget(loose, [0.3, 0.4, 0.3]).id, "thirds");
+test("cycle: 30/40/30 is within the tolerance of thirds only, so thirds is restored", () => {
+	assert.equal(script.pickTarget(config(), [0.3, 0.4, 0.3]).id, "thirds");
 });
 
-test("cycle: an unknown layout goes to the first", () => {
-	assert.equal(script.pickTarget(config(), [0.25, 0.25, 0.25, 0.25]).id, "halves");
-	assert.equal(script.pickTarget(config(), [0.8, 0.2]).id, "halves");
-	assert.equal(script.pickTarget(config(), []).id, "halves");
-	assert.equal(script.pickTarget(config(), [1]).id, "halves");
+test("cycle: a tie in the largest column difference goes to the earlier layout", () => {
+	const two = { mode: "cycle", target: "a", tolerance: 0.2, layouts: [{ id: "a", widths: [0.4, 0.6] }, { id: "b", widths: [0.6, 0.4] }] };
+	assert.equal(script.pickTarget(two, [0.5, 0.5]).id, "a");
+	const reversed = { ...two, layouts: [...two.layouts].reverse() };
+	assert.equal(script.pickTarget(reversed, [0.5, 0.5]).id, "b");
+});
+
+test("cycle: a screen with another column count goes to the first layout", () => {
+	assert.equal(script.pickTarget(config(), [0.25, 0.25, 0.25, 0.25]).id, "thirds");
+	assert.equal(script.pickTarget(config(), [0.5, 0.5]).id, "thirds");
+	assert.equal(script.pickTarget(config(), [0.8, 0.2]).id, "thirds");
+	assert.equal(script.pickTarget(config(), []).id, "thirds");
+	assert.equal(script.pickTarget(config(), [1]).id, "thirds");
 });
 
 test("set: the target is returned whatever the current layout", () => {
 	for (const current of [[0.5, 0.5], [0.25, 0.5, 0.25], [0.8, 0.2], []]) {
-		assert.equal(script.pickTarget(config("set", "wide"), current).id, "wide");
+		assert.equal(script.pickTarget(config("set", "quarters"), current).id, "quarters");
 		assert.equal(script.pickTarget(config("set", "thirds"), current).id, "thirds");
 	}
 });
@@ -269,7 +291,7 @@ test("nearestFirst orders columns by how near their centre is, ties go left", ()
 	assert.deepEqual(order(0.5, []), []);
 });
 
-test("apply: 3 to 2 columns keeps left left and right right; the middle goes left", () => {
+test("apply: three columns down to two keeps left left and right right; the middle goes left", () => {
 	manageCalls = [];
 	const root = row([1 / 3, 1 / 3, 1 / 3]);
 	const left = windowIn("left", root.tiles[0]);
@@ -282,7 +304,7 @@ test("apply: 3 to 2 columns keeps left left and right right; the middle goes lef
 	assert.equal(right.tile, root.tiles[1]);
 });
 
-test("apply: 25/50/25 to halves sends the middle window left", () => {
+test("apply: 25/50/25 down to two columns sends the middle window left", () => {
 	const root = row([0.25, 0.5, 0.25]);
 	const middle = windowIn("middle", root.tiles[1]);
 	const right = windowIn("right", root.tiles[2]);
@@ -290,6 +312,15 @@ test("apply: 25/50/25 to halves sends the middle window left", () => {
 	assertColumns(root, [0.5, 0.5]);
 	assert.equal(middle.tile, root.tiles[0]);
 	assert.equal(right.tile, root.tiles[1]);
+});
+
+test("apply: four columns down to three keeps left left and right right", () => {
+	const root = row([0.25, 0.25, 0.25, 0.25]);
+	const windows = root.tiles.map((tile, i) => windowIn(`w${i}`, tile));
+	script.apply(root, [1 / 3, 1 / 3, 1 / 3]);
+	assertColumns(root, [1 / 3, 1 / 3, 1 / 3]);
+	assert.equal(windows[0].tile, root.tiles[0]);
+	assert.equal(windows[3].tile, root.tiles[2]);
 });
 
 test("apply: 2 to 3 columns keeps left left and right right", () => {
@@ -352,10 +383,34 @@ test("apply: a vertical root is rebuilt as a horizontal row", () => {
 	assert.equal(bottom.tile, root.tiles[0]);
 });
 
-test("main: a cycle press moves halves to thirds", () => {
+test("main: a cycle press on two columns rebuilds them as thirds, windows keeping their sides", () => {
 	const root = row([0.5, 0.5]);
+	const left = windowIn("left", root.tiles[0]);
+	const right = windowIn("right", root.tiles[1]);
 	const errors = run(config(), root);
 	assert.deepEqual(errors, []);
+	assertColumns(root, [1 / 3, 1 / 3, 1 / 3]);
+	assert.equal(left.tile, root.tiles[0]);
+	assert.equal(right.tile, root.tiles[2]);
+});
+
+test("main: a cycle press on four columns rebuilds them as thirds, windows keeping their sides", () => {
+	const root = row([0.25, 0.25, 0.25, 0.25]);
+	const left = windowIn("left", root.tiles[0]);
+	const right = windowIn("right", root.tiles[3]);
+	assert.deepEqual(run(config(), root), []);
+	assertColumns(root, [1 / 3, 1 / 3, 1 / 3]);
+	assert.equal(left.tile, root.tiles[0]);
+	assert.equal(right.tile, root.tiles[2]);
+});
+
+test("main: each cycle press moves one layout on and the third wraps round", () => {
+	const root = row([1 / 3, 1 / 3, 1 / 3]);
+	run(config(), root);
+	assertColumns(root, [0.25, 0.5, 0.25]);
+	run(config(), root);
+	assertColumns(root, [0.2, 0.6, 0.2]);
+	run(config(), root);
 	assertColumns(root, [1 / 3, 1 / 3, 1 / 3]);
 });
 
@@ -364,18 +419,27 @@ test("main: drift is restored first, then the next press cycles on", () => {
 	run(config(), root);
 	assertColumns(root, [0.25, 0.5, 0.25]);
 	run(config(), root);
-	assertColumns(root, [0.5, 0.5]);
+	assertColumns(root, [0.2, 0.6, 0.2]);
 	run(config(), root);
 	assertColumns(root, [1 / 3, 1 / 3, 1 / 3]);
+});
+
+test("main: 22/56/22 is restored to fifths, 24/52/24 to quarters", () => {
+	const a = row([0.22, 0.56, 0.22]);
+	run(config(), a);
+	assertColumns(a, [0.2, 0.6, 0.2]);
+	const b = row([0.24, 0.52, 0.24]);
+	run(config(), b);
+	assertColumns(b, [0.25, 0.5, 0.25]);
 });
 
 test("main: an unknown layout goes to the first", () => {
 	const four = row([0.25, 0.25, 0.25, 0.25]);
 	run(config(), four);
-	assertColumns(four, [0.5, 0.5]);
+	assertColumns(four, [1 / 3, 1 / 3, 1 / 3]);
 	const lopsided = row([0.8, 0.2]);
 	run(config(), lopsided);
-	assertColumns(lopsided, [0.5, 0.5]);
+	assertColumns(lopsided, [1 / 3, 1 / 3, 1 / 3]);
 });
 
 test("main: a root that is not a flat row counts as unknown and is rebuilt", () => {
@@ -386,13 +450,13 @@ test("main: a root that is not a flat row counts as unknown and is rebuilt", () 
 		new FakeTile(root, { x: 0, y: 0.5, width: 1, height: 0.5 }),
 	];
 	run(config(), root);
-	assertColumns(root, [0.5, 0.5]);
+	assertColumns(root, [1 / 3, 1 / 3, 1 / 3]);
 });
 
 test("main: set mode applies the target whatever the current layout", () => {
 	for (const start of [[0.5, 0.5], [0.25, 0.5, 0.25], [0.8, 0.2], [0.25, 0.25, 0.25, 0.25], []]) {
 		const root = row(start);
-		run(config("set", "wide"), root);
+		run(config("set", "quarters"), root);
 		assertColumns(root, [0.25, 0.5, 0.25]);
 	}
 });
@@ -481,7 +545,7 @@ test("main: a window whose manage throws does not stop the others", () => {
 	const bad = windowIn("bad", root.tiles[1]);
 	bad.manageThrows = true;
 	const right = windowIn("right", root.tiles[2]);
-	const errors = run(config("set", "wide"), root);
+	const errors = run(config("set", "quarters"), root);
 	assertColumns(root, [0.25, 0.5, 0.25]);
 	assert.equal(left.tile, root.tiles[0]);
 	assert.equal(right.tile, root.tiles[2]);
@@ -495,7 +559,7 @@ test("main: a column that refuses a window sends it to the next nearest column",
 	const left = windowIn("left", root.tiles[0]);
 	const right = windowIn("right", root.tiles[1]);
 	root.tiles[1].refuses = ["right"];
-	const errors = run(config("set", "halves"), root);
+	const errors = run({ ...config("set", "two"), layouts: WITH_TWO }, root);
 	assert.equal(left.tile, root.tiles[0]);
 	assert.equal(right.tile, root.tiles[0]);
 	assert.deepEqual(errors, []);
@@ -506,7 +570,7 @@ test("main: a window no column takes is reported", () => {
 	windowIn("left", root.tiles[0]);
 	windowIn("right", root.tiles[1]);
 	for (const column of root.tiles) column.refuses = ["right"];
-	const errors = run(config("set", "halves"), root);
+	const errors = run({ ...config("set", "two"), layouts: WITH_TWO }, root);
 	assert.equal(errors.length, 1);
 	assert.match(errors[0], /^opendeck-utilities layout: .*right/);
 });
@@ -546,7 +610,7 @@ test("main: a column that cannot shrink is reported and windows go by the actual
 	const c = windowIn("c", root.tiles[2]);
 	// A window in the middle column is too wide for it to go below 0.6.
 	root.tiles[1].minWidth = 0.6;
-	const errors = run(config("set", "halves"), root);
+	const errors = run({ ...config("set", "two"), layouts: WITH_TWO }, root);
 	assert.equal(root.tiles.length, 2);
 	assert.deepEqual(widthsOf(root), [0.2, 0.8]);
 	// b was centred at 0.45: nearer the target left column (0.25) but the actual

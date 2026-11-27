@@ -42,10 +42,12 @@ actions for keys and dials:
   followed if several play), else the one it followed last, else the first by name;
   with no player it shows "Nothing playing". On macOS it shows "Linux only".
 - **Window Layout** (keys, KDE Plasma 6 on Linux only) - sets the columns of
-  KWin's custom tile layout in one press: 1/2 (two halves), 1/3 (three thirds) or
-  25·50·25 (a wide centre column). A key either always sets one layout or cycles
-  through the three; columns that have drifted from a layout are put back exactly
-  before the next press moves on. The key shows the chosen layout's columns, or
+  KWin's custom tile layout in one press to three columns whose side columns are
+  1/3, 1/4 or 1/5 of the screen wide (1/3·1/3·1/3, 25·50·25 or 20·60·20; the
+  middle column takes the rest). A key either always sets one layout or cycles
+  through the three (1/3, 1/4, 1/5, back to 1/3); columns that have drifted from a
+  layout are put back exactly before the next press moves on (the nearest layout
+  if they are close to more than one). The key shows the chosen layout's columns, or
   the cycle order; it does not show which layout is active. The key flashes an
   alert only when KWin can't be reached or won't load or run the script; a problem
   inside KWin (see [How window layouts work](#how-window-layouts-work)) is only
@@ -112,7 +114,12 @@ This needs KDE Plasma 6 on Linux. The layout applies to the screen in use
 tile move to the new column nearest the one they were in, so a window on the left
 stays on the left; floating and maximized windows are left alone. KWin saves the
 new layout itself (on KWin 6.8.2 it is written to `kwinrc` a couple of seconds
-after a press).
+after a press). A screen that has a different number of columns (or a tile tree
+that is not a single row) is rebuilt as three columns, its windows keeping their
+sides. In Cycle mode a press on the exact widths of a layout goes to the next
+one; widths within 8% of a layout in every column are that layout drifted and
+are restored to the nearest such layout (the earlier one in the cycle if two are
+equally near); anything else goes to 1/3.
 
 A KWin script can't hand anything back, so the key does not show which layout is
 active, and it can only report what goes wrong up to the point KWin runs the
@@ -247,14 +254,17 @@ maintainer's project notes (kept outside this repository), which the release not
 
 **Window Layout** (keys, Linux with KDE Plasma 6)
 
-- [ ] Three keys set to "Set one layout" with 1/2, 1/3 and 25·50·25: each press
-      gives that many columns at those widths on the active screen (`Meta+T` shows
-      them), and a window tiled on the left stays on the left.
+- [ ] Three keys set to "Set one layout" with 1/3, 1/4 and 1/5: each press
+      gives three columns with side columns 1/3, 1/4 and 1/5 wide on the active
+      screen (`Meta+T` shows them), and a window tiled on the left stays on the
+      left.
 - [ ] A key set to "Cycle through the layouts" moves to the next layout in the
-      order 1/2, 1/3, 25·50·25 on each press, wrapping round: three presses come
+      order 1/3, 1/4, 1/5 on each press, wrapping round: three presses come
       back to the layout it started on.
 - [ ] After dragging a column divider a little off a layout, one press of the
       Cycle key puts that layout back exactly; the next press moves on.
+- [ ] On a screen split into two columns (or four), one press of the Cycle key
+      gives three columns at 1/3, and the windows stay on their sides.
 - [ ] With KWin's D-Bus out of reach (e.g. a non-Plasma session), a press flashes
       the alert and the plugin log says why.
 

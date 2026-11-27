@@ -211,7 +211,7 @@ mod tests {
             ui.events(),
             [
                 "layout a 1/3 press to set",
-                "layout b Cycle 1/2 → 1/3 → 25·50·25"
+                "layout b Cycle 1/3 → 1/4 → 1/5"
             ]
         );
     }
@@ -220,28 +220,28 @@ mod tests {
     async fn a_press_runs_one_script_for_the_keys_settings() {
         let (action, port, ui) = rig(true);
         let k = Control::key("k");
-        action.appear(&k, &set(Layout::Halves)).await;
-        action.key(&k, &set(Layout::Halves));
+        action.appear(&k, &set(Layout::Thirds)).await;
+        action.key(&k, &set(Layout::Thirds));
         until("the script ran", || !port.scripts().is_empty()).await;
         // Let anything else the press might do happen.
         for _ in 0..10 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(runs(&port), [run("set", "halves")]);
+        assert_eq!(runs(&port), [run("set", "thirds")]);
         assert_eq!(ui.alerts(), 0);
 
         action.press(&k, &LayoutSettings::default()).await;
-        assert_eq!(runs(&port)[1], run("cycle", "wide"));
+        assert_eq!(runs(&port)[1], run("cycle", "quarters"));
     }
 
     #[tokio::test]
     async fn a_failed_run_alerts_that_key_only() {
         let (action, port, ui) = rig(true);
         let (a, b) = (Control::key("a"), Control::key("b"));
-        action.appear(&a, &set(Layout::Wide)).await;
-        action.appear(&b, &set(Layout::Wide)).await;
+        action.appear(&a, &set(Layout::Quarters)).await;
+        action.appear(&b, &set(Layout::Quarters)).await;
         *port.fail.lock().unwrap() = Some("KWin is not on the bus".into());
-        action.press(&a, &set(Layout::Wide)).await;
+        action.press(&a, &set(Layout::Quarters)).await;
         assert_eq!(ui.alerts(), 1);
         assert!(ui.events().contains(&"alert a".to_string()));
         assert!(!ui.events().contains(&"alert b".to_string()));
@@ -253,42 +253,39 @@ mod tests {
     async fn quick_presses_run_one_after_the_other_in_order() {
         let (action, port, _ui) = rig(true);
         let k = Control::key("k");
-        action.appear(&k, &set(Layout::Halves)).await;
+        action.appear(&k, &set(Layout::Thirds)).await;
         let hang = port.hang.lock().await;
-        action.key(&k, &set(Layout::Halves));
         action.key(&k, &set(Layout::Thirds));
+        action.key(&k, &set(Layout::Fifths));
         until("the first run started", || port.scripts().len() == 1).await;
         for _ in 0..20 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(runs(&port), [run("set", "halves")], "the second waited");
+        assert_eq!(runs(&port), [run("set", "thirds")], "the second waited");
         drop(hang);
         until("the second run started", || port.scripts().len() == 2).await;
-        assert_eq!(runs(&port), [run("set", "halves"), run("set", "thirds")]);
+        assert_eq!(runs(&port), [run("set", "thirds"), run("set", "fifths")]);
     }
 
     #[tokio::test]
     async fn changed_settings_re_render_and_drive_the_next_press() {
         let (action, port, ui) = rig(true);
         let k = Control::key("k");
-        action.appear(&k, &set(Layout::Halves)).await;
-        action.press(&k, &set(Layout::Halves)).await;
-        action.settings_changed(&k, &set(Layout::Wide)).await;
-        assert_eq!(
-            ui.events().last().unwrap(),
-            "layout k 25·50·25 press to set"
-        );
-        action.press(&k, &set(Layout::Wide)).await;
-        assert_eq!(runs(&port), [run("set", "halves"), run("set", "wide")]);
+        action.appear(&k, &set(Layout::Thirds)).await;
+        action.press(&k, &set(Layout::Thirds)).await;
+        action.settings_changed(&k, &set(Layout::Quarters)).await;
+        assert_eq!(ui.events().last().unwrap(), "layout k 1/4 press to set");
+        action.press(&k, &set(Layout::Quarters)).await;
+        assert_eq!(runs(&port), [run("set", "thirds"), run("set", "quarters")]);
     }
 
     #[tokio::test]
     async fn without_kwin_the_key_says_linux_only_and_a_press_does_nothing() {
         let (action, port, ui) = rig(false);
         let k = Control::key("k");
-        action.appear(&k, &set(Layout::Wide)).await;
+        action.appear(&k, &set(Layout::Quarters)).await;
         assert_eq!(ui.events(), ["layout k Linux only "]);
-        action.key(&k, &set(Layout::Wide));
+        action.key(&k, &set(Layout::Quarters));
         for _ in 0..20 {
             tokio::task::yield_now().await;
         }
@@ -300,10 +297,10 @@ mod tests {
     async fn a_key_that_has_gone_is_not_rendered() {
         let (action, _port, ui) = rig(true);
         let k = Control::key("k");
-        action.appear(&k, &set(Layout::Wide)).await;
+        action.appear(&k, &set(Layout::Quarters)).await;
         action.disappear(&k);
         ui.clear();
-        action.settings_changed(&k, &set(Layout::Halves)).await;
+        action.settings_changed(&k, &set(Layout::Thirds)).await;
         assert!(ui.events().is_empty(), "{:?}", ui.events());
         assert!(action.shared.instances.is_empty());
     }
