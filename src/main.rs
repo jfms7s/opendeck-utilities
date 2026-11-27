@@ -9,6 +9,9 @@ mod dnd;
 mod host;
 // Used by actions/layout.rs (next commit).
 #[allow(dead_code)]
+mod kwin;
+// Used by actions/layout.rs (next commit).
+#[allow(dead_code)]
 mod layout;
 mod lenient;
 mod media;
