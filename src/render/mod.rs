@@ -5,6 +5,9 @@
 
 pub mod dnd;
 pub mod icons;
+// Used by actions/layout.rs (next commit).
+#[allow(dead_code)]
+pub mod layout;
 pub mod level;
 pub mod media;
 pub mod profile;

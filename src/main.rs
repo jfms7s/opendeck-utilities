@@ -7,6 +7,9 @@ mod cycle;
 mod dispatch;
 mod dnd;
 mod host;
+// Used by actions/layout.rs (next commit).
+#[allow(dead_code)]
+mod layout;
 mod lenient;
 mod media;
 mod notifications;
